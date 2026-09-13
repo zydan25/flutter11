@@ -1,0 +1,18 @@
+{
+  "short_name": "شبيك",
+  "name": "تطبيق شبيك لشبكات السداد والاتصالات",
+  "icons": [
+    {
+      "src": "/src/assets/images/shopik_app_icon_1788991698917.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/"
+}

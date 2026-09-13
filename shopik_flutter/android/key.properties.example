@@ -1,0 +1,6 @@
+# Example key.properties file for SHOPIK Android App Signing
+# Place this file in shopik_flutter/android/key.properties
+storePassword=shopik_pay_secure_2026
+keyPassword=shopik_pay_secure_2026
+keyAlias=shopikpay
+storeFile=shopik-release.jks

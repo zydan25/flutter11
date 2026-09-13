@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="/">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="تطبيق شبيك باي - سداد الفواتير وباقات الاتصالات">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  
+  <!-- iOS meta tags & icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="شبيك باي">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>شبيك باي | Shopik Pay</title>
+  <link rel="manifest" href="manifest.json">
+  <script>
+    // Service Worker config
+    const serviceWorkerVersion = "1356535757" /* Flutter's service worker is deprecated and will be removed in a future Flutter release. */;
+  </script>
+  <script src="flutter.js" defer></script>
+  <style>
+    body {
+      background-color: #0f172a;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: #ffffff;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid rgba(255, 255, 255, 0.1);
+      border-left-color: #8B1D3B;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <div style="font-weight: bold; font-size: 16px;">جاري تشغيل تطبيق شبيك فلاتر...</div>
+  </div>
+  <script>
+    window.addEventListener('load', function(ev) {
+      // Download main.dart.js
+      _flutter.loader.loadEntrypoint({
+        serviceWorker: {
+          serviceWorkerVersion: serviceWorkerVersion,
+        },
+        onEntrypointLoaded: function(engineInitializer) {
+          engineInitializer.initializeEngine().then(function(appRunner) {
+            var loader = document.getElementById('loading');
+            if (loader) loader.remove();
+            appRunner.runApp();
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>
