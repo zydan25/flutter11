@@ -33,13 +33,6 @@ class _StoreViewState extends State<StoreView> {
     'ساعات ونظارات',
   ];
 
-  static const _defaultVendors = <Map<String, dynamic>>[
-    {'id': 1, 'store_name': 'متجر زيزو', 'name': 'زيزو للأزياء', 'badge': 'متجر معتمد وموثوق', 'rating': 4.9},
-    {'id': 2, 'store_name': 'متجر الأناقة', 'name': 'الأناقة ستور', 'badge': 'متجر رسمي معتمد', 'rating': 4.8},
-    {'id': 3, 'store_name': 'متجر التقنية', 'name': 'شبيك تكنولوجي', 'badge': 'إلكترونيات أصلية', 'rating': 4.9},
-    {'id': 4, 'store_name': 'متجر الشروق', 'name': 'الشروق مول', 'badge': 'أزياء وعطور', 'rating': 4.7},
-  ];
-
   @override
   void dispose() {
     search.dispose();
@@ -479,18 +472,32 @@ class _StoreViewState extends State<StoreView> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                const Text(
-                  'أقسام المتجر',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+            InkWell(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => legacy.CategoryProductsView(initialCategory: category),
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                child: Row(
+                  children: [
+                    const Text(
+                      'أقسام المتجر',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '($count منتج)',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8)),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  '($count منتج)',
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8)),
-                ),
-              ],
+              ),
             ),
             InkWell(
               onTap: () {
@@ -515,55 +522,58 @@ class _StoreViewState extends State<StoreView> {
           ],
         ),
         const SizedBox(height: 8),
-        SizedBox(
-          height: 38,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            reverse: false,
-            itemCount: chips.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 7),
-            itemBuilder: (_, i) {
-              final name = chips[i];
-              final active = category == name;
-              return InkWell(
-                onTap: () {
-                  setState(() => category = name);
-                  if (name != 'الكل') {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => legacy.CategoryProductsView(initialCategory: name),
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: SizedBox(
+            height: 38,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              reverse: false,
+              itemCount: chips.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 7),
+              itemBuilder: (_, i) {
+                final name = chips[i];
+                final active = category == name;
+                return InkWell(
+                  onTap: () {
+                    setState(() => category = name);
+                    if (name != 'الكل') {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => legacy.CategoryProductsView(initialCategory: name),
+                        ),
+                      );
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: active ? const Color(0xFF8B1D3B) : Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: active ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0),
                       ),
-                    );
-                  }
-                },
-                borderRadius: BorderRadius.circular(20),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: active ? const Color(0xFF8B1D3B) : Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: active ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0),
+                      boxShadow: active
+                          ? const [BoxShadow(color: Color(0x228B1D3B), blurRadius: 6, offset: Offset(0, 2))]
+                          : null,
                     ),
-                    boxShadow: active
-                        ? const [BoxShadow(color: Color(0x228B1D3B), blurRadius: 6, offset: Offset(0, 2))]
-                        : null,
-                  ),
-                  child: Center(
-                    child: Text(
-                      name,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: active ? Colors.white : const Color(0xFF334155),
+                    child: Center(
+                      child: Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: active ? Colors.white : const Color(0xFF334155),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -574,7 +584,28 @@ class _StoreViewState extends State<StoreView> {
   // 5. Verified Stores Section (Matching StoreView.tsx)
   // ==========================================
   Widget _buildVerifiedStoresSection(AppController app) {
-    final vendors = app.vendors.isNotEmpty ? app.vendors.take(6).toList() : _defaultVendors;
+    final vendors = app.vendors.isNotEmpty
+        ? app.vendors.take(6).toList()
+        : () {
+            final map = <int, Map<String, dynamic>>{};
+            for (final p in app.products) {
+              if (p.vendorId != null && !map.containsKey(p.vendorId)) {
+                map[p.vendorId!] = {
+                  'id': p.vendorId,
+                  'store_name': p.vendorName.isNotEmpty ? p.vendorName : 'متجر شبيك',
+                  'phone': p.vendorPhone,
+                  'logo_url': p.vendorLogo,
+                  'cover_url': p.vendorCover,
+                  'status': 'active',
+                  'rating': p.rating > 0 ? p.rating : 4.9,
+                  'badge': 'متجر معتمد وموثوق',
+                };
+              }
+            }
+            return map.values.take(6).toList();
+          }();
+
+    if (vendors.isEmpty) return const SizedBox.shrink();
 
     return Column(
       children: [

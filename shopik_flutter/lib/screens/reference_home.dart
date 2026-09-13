@@ -234,22 +234,62 @@ class _MainHomeScreenState extends State<MainHomeScreen> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: shortcuts.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8, childAspectRatio: 1.36),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+                childAspectRatio: 2.35,
+              ),
               itemBuilder: (_, index) {
                 final shortcut = shortcuts[index];
                 return InkWell(
                   onTap: () => _open(context, shortcut.screen),
-                  borderRadius: BorderRadius.circular(17),
+                  borderRadius: BorderRadius.circular(14),
                   child: Container(
-                    padding: const EdgeInsets.all(9),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border)),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Container(width: 28, height: 28, decoration: BoxDecoration(color: shortcut.color, borderRadius: BorderRadius.circular(9)), child: Icon(shortcut.icon, color: Colors.white, size: 16)),
-                      const Spacer(),
-                      Text(shortcut.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
-                      const SizedBox(height: 2),
-                      Text(shortcut.subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 8.5, color: AppColors.muted, fontWeight: FontWeight.w600)),
-                    ]),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.border),
+                      boxShadow: const [
+                        BoxShadow(color: Color(0x06000000), blurRadius: 4, offset: Offset(0, 1)),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: shortcut.color,
+                            borderRadius: BorderRadius.circular(7),
+                          ),
+                          child: Icon(shortcut.icon, color: Colors.white, size: 13),
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                shortcut.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                shortcut.subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 7.5, color: AppColors.muted, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },

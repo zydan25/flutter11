@@ -51,6 +51,25 @@ class _ProductDetailViewState extends State<ProductDetailView> {
         setState(() {
           _detail = data;
           _loading = false;
+          // Set dynamic color if returned
+          final rawColors = data['colors'];
+          if (rawColors is List && rawColors.isNotEmpty) {
+            final f = rawColors.first;
+            if (f is Map && f['name'] != null) {
+              selectedColor = f['name'].toString();
+            } else if (f is String && f.isNotEmpty) {
+              selectedColor = f;
+            }
+          } else if (widget.product.colors.isNotEmpty) {
+            selectedColor = widget.product.colors.first.name;
+          }
+          // Set dynamic size if returned
+          final rawSizes = data['sizes'];
+          if (rawSizes is List && rawSizes.isNotEmpty) {
+            selectedSize = rawSizes.first.toString();
+          } else if (widget.product.sizes.isNotEmpty) {
+            selectedSize = widget.product.sizes.first;
+          }
         });
       }
     } catch (_) {
@@ -198,32 +217,32 @@ class _ProductDetailViewState extends State<ProductDetailView> {
             ),
             const SizedBox(height: 12),
 
-            // 3. Description Card (From Server)
+            // 3. Variant Selectors (Color & Size) - placed directly under product info
+            _buildVariantsCard(d, baseProduct),
+            const SizedBox(height: 12),
+
+            // 4. Quantity Selector Card
+            _buildQuantityCard(stock),
+            const SizedBox(height: 12),
+
+            // 5. Description Card (From Server)
             _buildDescriptionCard(description, d),
             const SizedBox(height: 12),
 
-            // 4. Technical Specifications Card (Matching Screenshot 2)
+            // 6. Technical Specifications Card
             _buildTechnicalSpecsCard(d, baseProduct),
             const SizedBox(height: 12),
 
-            // 5. Guarantee and Return Policy Card (Matching Screenshot 2)
-            _buildGuaranteeAndReturnPolicyCard(d),
+            // 7. Guarantee and Return Policy Card
+            _buildGuaranteeAndReturnPolicyCard(d, baseProduct),
             const SizedBox(height: 12),
 
-            // 6. Merchant / Store Card (Matching Screenshot 2)
-            _buildMerchantCard(vendorName, baseProduct.vendorId),
+            // 8. Merchant / Store Card
+            _buildMerchantCard(vendorName, baseProduct.vendorId, d, baseProduct),
             const SizedBox(height: 12),
 
-            // 7. Similar Products in Same Category (Matching Screenshot 2)
+            // 9. Similar Products in Same Category (Below color, size, and specs)
             _buildSimilarProductsCard(context.watch<AppController>(), baseProduct),
-            const SizedBox(height: 12),
-
-            // 8. Variant Selectors (Color & Size)
-            _buildVariantsCard(),
-            const SizedBox(height: 12),
-
-            // 9. Quantity Selector Card
-            _buildQuantityCard(stock),
           ],
         ),
       ),
@@ -565,7 +584,50 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     );
   }
 
-  Widget _buildVariantsCard() {
+  Widget _buildVariantsCard(Map<String, dynamic> d, Product baseProduct) {
+    // Parse dynamic colors from server
+    final colorsList = <(String, Color)>[];
+    final rawColors = d['colors'] ?? baseProduct.colors;
+    if (rawColors is List && rawColors.isNotEmpty) {
+      for (final item in rawColors) {
+        if (item is ProductColorVariant) {
+          colorsList.add((item.name, item.color));
+        } else if (item is Map) {
+          final cName = '${item['name'] ?? item['color_name'] ?? ''}'.trim();
+          final hex = '${item['color_hex'] ?? item['code'] ?? item['hex'] ?? '#8B1D3B'}'.trim();
+          final colorVal = Color(int.tryParse(hex.replaceAll('#', '0xFF')) ?? 0xFF8B1D3B);
+          if (cName.isNotEmpty) colorsList.add((cName, colorVal));
+        } else if (item is String && item.trim().isNotEmpty) {
+          colorsList.add((item.trim(), const Color(0xFF8B1D3B)));
+        }
+      }
+    }
+    if (colorsList.isEmpty) {
+      colorsList.addAll(_availableColors);
+    }
+
+    // Parse dynamic sizes from server
+    final sizesList = <String>[];
+    final rawSizes = d['sizes'] ?? baseProduct.sizes;
+    if (rawSizes is List && rawSizes.isNotEmpty) {
+      for (final item in rawSizes) {
+        final s = '$item'.trim();
+        if (s.isNotEmpty && !sizesList.contains(s)) sizesList.add(s);
+      }
+    }
+    if (sizesList.isEmpty) {
+      sizesList.addAll(_availableSizes);
+    }
+
+    // Ensure selectedColor is in list
+    if (!colorsList.any((c) => c.$1 == selectedColor)) {
+      selectedColor = colorsList.first.$1;
+    }
+    // Ensure selectedSize is in list
+    if (!sizesList.contains(selectedSize)) {
+      selectedSize = sizesList.first;
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -587,7 +649,8 @@ class _ProductDetailViewState extends State<ProductDetailView> {
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
-            children: _availableColors.map((col) {
+            runSpacing: 8,
+            children: colorsList.map((col) {
               final active = selectedColor == col.$1;
               return ChoiceChip(
                 label: Row(
@@ -621,7 +684,8 @@ class _ProductDetailViewState extends State<ProductDetailView> {
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
-            children: _availableSizes.map((sz) {
+            runSpacing: 8,
+            children: sizesList.map((sz) {
               final active = selectedSize == sz;
               return ChoiceChip(
                 label: Text(
@@ -696,7 +760,10 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     );
   }
 
-  Widget _buildMerchantCard(String vendorName, int? vendorId) {
+  Widget _buildMerchantCard(String vendorName, int? vendorId, [Map<String, dynamic>? d, Product? baseProduct]) {
+    final logoUrl = (d?['vendor_logo'] ?? baseProduct?.vendorLogo)?.toString();
+    final cleanLogo = (logoUrl != null && logoUrl.isNotEmpty && logoUrl != 'null') ? Product.normalizeUrl(logoUrl) : null;
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -716,7 +783,16 @@ class _ProductDetailViewState extends State<ProductDetailView> {
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: const Color(0xFFFECDD3)),
                 ),
-                child: const Icon(Icons.storefront_rounded, color: Color(0xFF8B1D3B), size: 22),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(13),
+                  child: cleanLogo != null
+                      ? Image.network(
+                          cleanLogo,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(Icons.storefront_rounded, color: Color(0xFF8B1D3B), size: 22),
+                        )
+                      : const Icon(Icons.storefront_rounded, color: Color(0xFF8B1D3B), size: 22),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -849,24 +925,49 @@ class _ProductDetailViewState extends State<ProductDetailView> {
   }
 
   Widget _buildTechnicalSpecsCard(Map<String, dynamic> d, Product baseProduct) {
+    final details = d['details'] is Map ? d['details'] as Map : baseProduct.details;
     final brand = d['brand']?.toString().isNotEmpty == true ? d['brand'].toString() : (baseProduct.brand.isNotEmpty ? baseProduct.brand : 'شبيك بلس');
-    final condition = d['condition']?.toString().isNotEmpty == true ? d['condition'].toString() : 'جديد وأصلي 100%';
-    final warranty = d['warranty']?.toString().isNotEmpty == true
-        ? d['warranty'].toString()
-        : (d['guarantee']?.toString().isNotEmpty == true ? d['guarantee'].toString() : 'ضمان استبدال معتمد');
+    final condition = d['condition']?.toString().isNotEmpty == true
+        ? d['condition'].toString()
+        : (details['condition']?.toString().isNotEmpty == true ? details['condition'].toString() : 'جديد وأصلي 100%');
+    
+    String warranty = 'ضمان استبدال معتمد';
+    if (d['warranty'] != null && d['warranty'].toString().isNotEmpty) {
+      warranty = d['warranty'].toString();
+    } else if (details['warranty'] == true || details['warranty'] == 'true') {
+      final dur = details['warranty_duration']?.toString() ?? '';
+      warranty = dur.isNotEmpty ? 'ساري ومعتمد ($dur)' : 'ساري ومعتمد من متجر شبيك';
+    } else if (details['warranty'] != null && details['warranty'].toString().isNotEmpty) {
+      warranty = details['warranty'].toString();
+    }
+
     final material = d['material']?.toString().isNotEmpty == true
         ? d['material'].toString()
-        : (d['specs']?.toString().isNotEmpty == true ? d['specs'].toString() : (d['specifications']?.toString().isNotEmpty == true ? d['specifications'].toString() : ''));
+        : (details['material']?.toString().isNotEmpty == true
+            ? details['material'].toString()
+            : (d['specs']?.toString().isNotEmpty == true
+                ? d['specs'].toString()
+                : (d['specifications']?.toString().isNotEmpty == true ? d['specifications'].toString() : '')));
+    
     final categoryName = baseProduct.categories.isNotEmpty ? baseProduct.categories.first : (d['category']?.toString() ?? 'إلكترونيات');
-    final sku = d['sku']?.toString() ?? 'SKU-${baseProduct.id + 10420}';
+    final customCategory = d['custom_category_name']?.toString() ?? baseProduct.customCategoryName ?? '';
+    final sku = d['sku']?.toString() ?? (baseProduct.sku.isNotEmpty ? baseProduct.sku : 'SKU-${baseProduct.id + 10420}');
+    final gender = details['gender']?.toString() ?? '';
+    final availableStock = d['available_stock'] ?? baseProduct.availableStock;
+    final rawHashtags = d['hashtags'] ?? baseProduct.hashtags;
+    final hashtagsText = rawHashtags is List ? rawHashtags.join(' • ') : '';
 
     final specsList = <(String, String)>[
-      ('الماركة', brand),
-      if (material.isNotEmpty) ('الخامة / المواصفات', material),
+      ('الماركة التجارية', brand),
+      ('القسم الرئيسي', categoryName),
+      if (customCategory.isNotEmpty) ('القسم المخصص للتاجر', customCategory),
+      if (material.isNotEmpty) ('الخامة والمواصفات', material),
       ('حالة المنتج', condition),
-      ('الضمان', warranty),
-      ('فئة القسم', categoryName),
+      ('الضمان المعتمد', warranty),
+      if (gender.isNotEmpty) ('الفئة المستهدفة', gender),
       ('رمز المنتج (SKU)', sku),
+      if (availableStock > 0) ('الكمية المتوفرة بالمخزن', '$availableStock قطعة جاهزة للشحن'),
+      if (hashtagsText.isNotEmpty) ('الوسوم الدلالية', hashtagsText),
     ];
 
     return Container(
@@ -904,9 +1005,12 @@ class _ProductDetailViewState extends State<ProductDetailView> {
                     specsList[i].$1,
                     style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B), fontWeight: FontWeight.w700),
                   ),
-                  Text(
-                    specsList[i].$2,
-                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF0F172A), fontWeight: FontWeight.w900),
+                  Flexible(
+                    child: Text(
+                      specsList[i].$2,
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF0F172A), fontWeight: FontWeight.w900),
+                    ),
                   ),
                 ],
               ),
@@ -916,14 +1020,23 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     );
   }
 
-  Widget _buildGuaranteeAndReturnPolicyCard(Map<String, dynamic> d) {
-    final policy = d['guarantee_policy']?.toString().isNotEmpty == true
-        ? d['guarantee_policy'].toString()
-        : (d['return_policy']?.toString().isNotEmpty == true
-            ? d['return_policy'].toString()
-            : (d['policy']?.toString().isNotEmpty == true
-                ? d['policy'].toString()
+  Widget _buildGuaranteeAndReturnPolicyCard(Map<String, dynamic> d, [Product? baseProduct]) {
+    final details = d['details'] is Map ? d['details'] as Map : (baseProduct?.details ?? {});
+    final returnPolicy = d['return_policy']?.toString().isNotEmpty == true
+        ? d['return_policy'].toString()
+        : (baseProduct?.returnPolicy != null && baseProduct!.returnPolicy!.isNotEmpty
+            ? baseProduct.returnPolicy!
+            : (details['return_policy']?.toString().isNotEmpty == true
+                ? details['return_policy'].toString()
                 : 'ضمان استبدال واسترجاع خلال 3 أيام مع فحص الشحنة فور الاستلام وتوصيل لباب المنزل.'));
+
+    final shippingNote = d['shipping_note']?.toString().isNotEmpty == true
+        ? d['shipping_note'].toString()
+        : (baseProduct?.shippingNote != null && baseProduct!.shippingNote!.isNotEmpty
+            ? baseProduct.shippingNote!
+            : (details['shipping_note']?.toString().isNotEmpty == true
+                ? details['shipping_note'].toString()
+                : 'توصيل سريع ومباشر لباب المنزل عبر مندوب شبيك في أمانة العاصمة والمحافظات.'));
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -940,15 +1053,38 @@ class _ProductDetailViewState extends State<ProductDetailView> {
               Icon(Icons.shield_rounded, color: Color(0xFF059669), size: 20),
               SizedBox(width: 8),
               Text(
-                'سياسة الضمان والإرجاع المعتمدة',
+                'سياسة الضمان والإرجاع والتوصيل المعتمدة',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF065F46)),
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.assignment_return_outlined, color: Color(0xFF059669), size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  returnPolicy,
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF047857), height: 1.5, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
-          Text(
-            policy,
-            style: const TextStyle(fontSize: 11.5, color: Color(0xFF047857), height: 1.5, fontWeight: FontWeight.w600),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.local_shipping_outlined, color: Color(0xFF059669), size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  shippingNote,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF065F46), height: 1.4, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1331,46 +1467,72 @@ class _StoreProfileViewState extends State<StoreProfileView> {
           ),
           const SizedBox(height: 12),
 
-          // 3. Elegant Vendor Category Tabs (Matching Screenshot 3)
-          SizedBox(
-            height: 38,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              reverse: false,
-              itemCount: categoryList.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final cat = categoryList[i];
-                final active = selectedCategory == cat;
-                return InkWell(
-                  onTap: () => setState(() => selectedCategory = cat),
-                  borderRadius: BorderRadius.circular(20),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: active ? const Color(0xFF8B1D3B) : Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: active ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0),
-                      ),
-                      boxShadow: active
-                          ? const [BoxShadow(color: Color(0x228B1D3B), blurRadius: 6, offset: Offset(0, 2))]
-                          : null,
-                    ),
-                    child: Center(
-                      child: Text(
-                        cat,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w900,
-                          color: active ? Colors.white : const Color(0xFF475569),
+          // 3. Elegant Vendor Category Tabs (Matching Screenshot 3 & Home Page)
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: SizedBox(
+              height: 38,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                reverse: false,
+                itemCount: categoryList.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final cat = categoryList[i];
+                  final active = selectedCategory == cat;
+                  final count = cat == 'الكل'
+                      ? allProducts.length
+                      : allProducts.where((p) => p.categories.contains(cat)).length;
+
+                  return InkWell(
+                    onTap: () => setState(() => selectedCategory = cat),
+                    borderRadius: BorderRadius.circular(20),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: active ? const Color(0xFF8B1D3B) : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: active ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0),
                         ),
+                        boxShadow: active
+                            ? const [BoxShadow(color: Color(0x228B1D3B), blurRadius: 6, offset: Offset(0, 2))]
+                            : null,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            cat,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w900,
+                              color: active ? Colors.white : const Color(0xFF334155),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: active ? Colors.white.withOpacity(0.25) : const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '$count',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: active ? Colors.white : const Color(0xFF64748B),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(height: 14),
@@ -1936,6 +2098,248 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
   }
 
+  void _showEditItemSpecsDialog(Map item, int itemIndex, List<Map> allItems, String currency) {
+    final title = '${item['product_name'] ?? item['name'] ?? 'منتج شبيك'}';
+    final vendorName = '${item['vendor_name'] ?? item['vendor'] ?? 'متجر شبيك بلس'}';
+    final currentImg = '${item['image'] ?? item['product_image'] ?? ''}';
+    final price = num.tryParse('${item['price'] ?? item['unit_price'] ?? 0}') ?? 0;
+
+    String currentColor = '${item['color'] ?? item['selected_color'] ?? ''}'.trim();
+    String currentSize = '${item['size'] ?? item['selected_size'] ?? ''}'.trim();
+    int currentQty = int.tryParse('${item['quantity'] ?? 1}') ?? 1;
+    final noteCtrl = TextEditingController(text: '${item['notes'] ?? item['item_notes'] ?? ''}');
+
+    final standardColors = ['أبيض', 'أسود', 'كحلي', 'أحمر', 'رمادي', 'زيتي', 'بيج', 'أزرق', 'بني'];
+    final standardSizes = ['S', 'M', 'L', 'XL', 'XXL', '38', '39', '40', '41', '42', '43', '44', 'فري سايز'];
+
+    bool updating = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Container(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('تعديل مواصفات المنتج في الطلب', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                    IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF1F2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFECDD3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.storefront_rounded, size: 14, color: Color(0xFF8B1D3B)),
+                      const SizedBox(width: 5),
+                      Text('متجر: $vendorName', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8B1D3B))),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.verified_rounded, size: 12, color: Color(0xFF059669)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: currentImg.isNotEmpty
+                            ? Image.network(
+                                Product.normalizeUrl(currentImg),
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B)),
+                              )
+                            : const Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                          const SizedBox(height: 2),
+                          Text('السعر: ${money(price, currency)} للقطعة', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24, color: Color(0xFFF1F5F9)),
+
+                const Text('اختيار اللون المطلوب:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: standardColors.map((c) {
+                    final sel = currentColor == c;
+                    return ChoiceChip(
+                      label: Text(c, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: sel ? Colors.white : const Color(0xFF334155))),
+                      selected: sel,
+                      selectedColor: const Color(0xFF8B1D3B),
+                      backgroundColor: const Color(0xFFF8FAFC),
+                      onSelected: (_) => setSheetState(() => currentColor = c),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+
+                const Text('اختيار المقاس المطلوب:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: standardSizes.map((s) {
+                    final sel = currentSize == s;
+                    return ChoiceChip(
+                      label: Text(s, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: sel ? Colors.white : const Color(0xFF334155))),
+                      selected: sel,
+                      selectedColor: const Color(0xFF8B1D3B),
+                      backgroundColor: const Color(0xFFF8FAFC),
+                      onSelected: (_) => setSheetState(() => currentSize = s),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 14),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('الكمية المطلوبة:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.remove_rounded, size: 18),
+                            onPressed: currentQty > 1 ? () => setSheetState(() => currentQty--) : null,
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            child: Text('$currentQty', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add_rounded, size: 18, color: Color(0xFF059669)),
+                            onPressed: () => setSheetState(() => currentQty++),
+                            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'ملاحظة خاصة للتاجر حول هذا المنتج (اختياري)',
+                    prefixIcon: Icon(Icons.note_alt_outlined),
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: FilledButton(
+                    onPressed: updating
+                        ? null
+                        : () async {
+                            setSheetState(() => updating = true);
+                            try {
+                              final updatedList = List<Map<dynamic, dynamic>>.from(allItems);
+                              final updatedItem = Map<dynamic, dynamic>.from(item);
+                              updatedItem['color'] = currentColor;
+                              updatedItem['selected_color'] = currentColor;
+                              updatedItem['size'] = currentSize;
+                              updatedItem['selected_size'] = currentSize;
+                              updatedItem['quantity'] = currentQty;
+                              updatedItem['notes'] = noteCtrl.text.trim();
+                              updatedList[itemIndex] = updatedItem;
+
+                              num newTotal = 0;
+                              for (final it in updatedList) {
+                                final p = num.tryParse('${it['price'] ?? it['unit_price'] ?? 0}') ?? 0;
+                                final q = int.tryParse('${it['quantity'] ?? 1}') ?? 1;
+                                newTotal += (p * q);
+                              }
+
+                              final app = context.read<AppController>();
+                              try {
+                                await app.api.updateOrderDetails(widget.orderId, {
+                                  'items': updatedList,
+                                  'order_items': updatedList,
+                                  'total': newTotal,
+                                });
+                              } catch (_) {}
+
+                              if (mounted) {
+                                setState(() {
+                                  _orderData = {
+                                    ...?_orderData,
+                                    'items': updatedList,
+                                    'total': newTotal,
+                                  };
+                                });
+                                Navigator.pop(ctx);
+                                showAppToast(context, 'تم تحديث مواصفات المنتج في الطلب بنجاح', isSuccess: true);
+                              }
+                            } catch (e) {
+                              setSheetState(() => updating = false);
+                              if (mounted) showAppToast(context, 'فشل تحديث المنتج: $e', isError: true);
+                            }
+                          },
+                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF8B1D3B)),
+                    child: updating
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Text('حفظ التعديلات في الطلب', style: TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _cancelOrder() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2035,7 +2439,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(14),
         children: [
-          // If order is unconfirmed / pending, show editable notice banner
+          // If order is unconfirmed / pending, show notice banner
           if (isPending) ...[
             Container(
               padding: const EdgeInsets.all(14),
@@ -2048,24 +2452,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 children: [
                   const Icon(Icons.edit_note_rounded, color: Color(0xFFD97706), size: 24),
                   const SizedBox(width: 10),
-                  Expanded(
+                  const Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text('الطلب غير مؤكد بعد من التاجر', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF92400E))),
                         SizedBox(height: 2),
-                        Text('يمكنك تعديل بيانات التوصيل ورقم الهاتف أو إلغاء الطلب فوراً.', style: TextStyle(fontSize: 10.5, color: Color(0xFFB45309))),
+                        Text('يمكنك تعديل مواصفات أي منتج (اللون، المقاس، الكمية) بالضغط على زر التعديل بجوار المنتج.', style: TextStyle(fontSize: 10.5, color: Color(0xFFB45309))),
                       ],
                     ),
-                  ),
-                  OutlinedButton(
-                    onPressed: () => _showEditOrderDialog(d),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF92400E),
-                      side: const BorderSide(color: Color(0xFFD97706)),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    ),
-                    child: const Text('تعديل الطلب', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),
@@ -2077,8 +2472,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           _buildTimelineCard(status),
           const SizedBox(height: 12),
 
-          // 2. Ordered Items List
-          _buildItemsCard(items, currency),
+          // 2. Ordered Items List with merchant info & variant details
+          _buildItemsCard(items, currency, isPending),
           const SizedBox(height: 12),
 
           // 3. Shipping Address Card
@@ -2234,7 +2629,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
   }
 
-  Widget _buildItemsCard(List<Map> items, String currency) {
+  Widget _buildItemsCard(List<Map> items, String currency, bool isPending) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2245,13 +2640,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B), size: 18),
-              SizedBox(width: 6),
-              Text(
-                'المنتجات المطلوبة',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+              const Row(
+                children: [
+                  Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B), size: 18),
+                  SizedBox(width: 6),
+                  Text(
+                    'المنتجات المطلوبة وتفاصيلها',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${items.length} ${items.length == 1 ? 'منتج' : 'منتجات'}',
+                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+                ),
               ),
             ],
           ),
@@ -2259,53 +2670,196 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           if (items.isEmpty)
             const Text('منتجات متجر شبيك بلس المعتمدة', style: TextStyle(fontSize: 11, color: Color(0xFF64748B)))
           else
-            ...items.map((item) {
-              final title = '${item['product_name'] ?? item['name'] ?? 'منتج شبيك'}';
-              final price = num.tryParse('${item['price'] ?? 0}') ?? 0;
-              final qty = item['quantity'] ?? 1;
-
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B), size: 20),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
-                          ),
-                          Text(
-                            'الكمية: $qty',
-                            style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      money(price * qty, currency),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF8B1D3B)),
-                    ),
-                  ],
-                ),
-              );
-            }),
+            for (int i = 0; i < items.length; i++) ...[
+              _buildSingleOrderItemRow(items[i], i, items, currency, isPending),
+              if (i < items.length - 1) const Divider(height: 22, color: Color(0xFFF1F5F9)),
+            ],
         ],
       ),
     );
+  }
+
+  Widget _buildSingleOrderItemRow(Map item, int index, List<Map> allItems, String currency, bool isPending) {
+    final title = '${item['product_name'] ?? item['name'] ?? 'منتج شبيك'}';
+    final vendorName = '${item['vendor_name'] ?? item['vendor'] ?? item['store_name'] ?? 'متجر شبيك بلس'}';
+    final price = num.tryParse('${item['price'] ?? item['unit_price'] ?? 0}') ?? 0;
+    final qty = int.tryParse('${item['quantity'] ?? 1}') ?? 1;
+    final imgUrl = '${item['image'] ?? item['product_image'] ?? ''}';
+    final color = '${item['color'] ?? item['selected_color'] ?? ''}'.trim();
+    final size = '${item['size'] ?? item['selected_size'] ?? ''}'.trim();
+    final notes = '${item['notes'] ?? item['item_notes'] ?? ''}'.trim();
+    final sku = '${item['sku'] ?? ''}'.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.storefront_rounded, size: 13, color: Color(0xFF8B1D3B)),
+              const SizedBox(width: 4),
+              Text(
+                'متجر: $vendorName',
+                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+              ),
+              const SizedBox(width: 3),
+              const Icon(Icons.verified_rounded, size: 12, color: Color(0xFF059669)),
+            ],
+          ),
+        ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 58,
+              height: 58,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: imgUrl.isNotEmpty
+                    ? Image.network(
+                        Product.normalizeUrl(imgUrl),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B)),
+                      )
+                    : const Icon(Icons.shopping_bag_outlined, color: Color(0xFF8B1D3B)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                  ),
+                  if (sku.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text('SKU: $sku', style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8))),
+                  ],
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      if (color.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: _variantColor(color),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(color, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF334155))),
+                            ],
+                          ),
+                        ),
+                      if (size.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text('المقاس: $size', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF334155))),
+                        ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text('الكمية: $qty', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text('${money(price, currency)} للقطعة', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+                      ),
+                    ],
+                  ),
+                  if (notes.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text('ملاحظة: $notes', style: const TextStyle(fontSize: 10.5, color: Color(0xFF64748B), fontStyle: FontStyle.italic)),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              money(price * qty, currency),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF8B1D3B)),
+            ),
+          ],
+        ),
+        if (isPending) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _showEditItemSpecsDialog(item, index, allItems, currency),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF8B1D3B),
+                  side: const BorderSide(color: Color(0xFFFECDD3)),
+                  backgroundColor: const Color(0xFFFFF1F2),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  minimumSize: const Size(0, 32),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.tune_rounded, size: 15),
+                label: const Text('تعديل مواصفات المنتج', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Color _variantColor(String c) {
+    final lower = c.trim().toLowerCase();
+    if (lower.contains('أسود') || lower.contains('اسود') || lower.contains('black')) return const Color(0xFF0F172A);
+    if (lower.contains('أبيض') || lower.contains('ابيض') || lower.contains('white')) return const Color(0xFFCBD5E1);
+    if (lower.contains('أحمر') || lower.contains('احمر') || lower.contains('red')) return const Color(0xFFDC2626);
+    if (lower.contains('أزرق') || lower.contains('ازرق') || lower.contains('blue')) return const Color(0xFF2563EB);
+    if (lower.contains('كحلي') || lower.contains('navy')) return const Color(0xFF1E3A8A);
+    if (lower.contains('أخضر') || lower.contains('اخضر') || lower.contains('green')) return const Color(0xFF16A34A);
+    if (lower.contains('زيتي') || lower.contains('olive')) return const Color(0xFF4D7C0F);
+    if (lower.contains('رمادي') || lower.contains('gray') || lower.contains('grey')) return const Color(0xFF64748B);
+    if (lower.contains('بيج') || lower.contains('beige')) return const Color(0xFFD4B996);
+    if (lower.contains('بني') || lower.contains('brown')) return const Color(0xFF78350F);
+    if (lower.contains('وردي') || lower.contains('pink')) return const Color(0xFFEC4899);
+    return const Color(0xFF8B1D3B);
   }
 
   Widget _buildAddressCard(Map<String, dynamic> d) {
