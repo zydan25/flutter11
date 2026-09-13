@@ -61,14 +61,16 @@ class _ProductDetailViewState extends State<ProductDetailView> {
               selectedColor = f;
             }
           } else if (widget.product.colors.isNotEmpty) {
-            selectedColor = widget.product.colors.first.name;
+            final f = widget.product.colors.first;
+            selectedColor = '${f['name'] ?? f['color_name'] ?? f['color'] ?? ''}';
           }
           // Set dynamic size if returned
           final rawSizes = data['sizes'];
           if (rawSizes is List && rawSizes.isNotEmpty) {
             selectedSize = rawSizes.first.toString();
           } else if (widget.product.sizes.isNotEmpty) {
-            selectedSize = widget.product.sizes.first;
+            final f = widget.product.sizes.first;
+            selectedSize = '${f['name'] ?? f['size'] ?? f['size_name'] ?? f}';
           }
         });
       }
@@ -590,10 +592,8 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     final rawColors = d['colors'] ?? baseProduct.colors;
     if (rawColors is List && rawColors.isNotEmpty) {
       for (final item in rawColors) {
-        if (item is ProductColorVariant) {
-          colorsList.add((item.name, item.color));
-        } else if (item is Map) {
-          final cName = '${item['name'] ?? item['color_name'] ?? ''}'.trim();
+        if (item is Map) {
+          final cName = '${item['name'] ?? item['color_name'] ?? item['color'] ?? ''}'.trim();
           final hex = '${item['color_hex'] ?? item['code'] ?? item['hex'] ?? '#8B1D3B'}'.trim();
           final colorVal = Color(int.tryParse(hex.replaceAll('#', '0xFF')) ?? 0xFF8B1D3B);
           if (cName.isNotEmpty) colorsList.add((cName, colorVal));
@@ -611,8 +611,13 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     final rawSizes = d['sizes'] ?? baseProduct.sizes;
     if (rawSizes is List && rawSizes.isNotEmpty) {
       for (final item in rawSizes) {
-        final s = '$item'.trim();
-        if (s.isNotEmpty && !sizesList.contains(s)) sizesList.add(s);
+        if (item is Map) {
+          final s = '${item['name'] ?? item['size'] ?? item['size_name'] ?? ''}'.trim();
+          if (s.isNotEmpty && !sizesList.contains(s)) sizesList.add(s);
+        } else {
+          final s = '$item'.trim();
+          if (s.isNotEmpty && !sizesList.contains(s)) sizesList.add(s);
+        }
       }
     }
     if (sizesList.isEmpty) {
@@ -1024,16 +1029,16 @@ class _ProductDetailViewState extends State<ProductDetailView> {
     final details = d['details'] is Map ? d['details'] as Map : (baseProduct?.details ?? {});
     final returnPolicy = d['return_policy']?.toString().isNotEmpty == true
         ? d['return_policy'].toString()
-        : (baseProduct?.returnPolicy != null && baseProduct!.returnPolicy!.isNotEmpty
-            ? baseProduct.returnPolicy!
+        : (baseProduct != null && baseProduct.returnPolicy.isNotEmpty
+            ? baseProduct.returnPolicy
             : (details['return_policy']?.toString().isNotEmpty == true
                 ? details['return_policy'].toString()
                 : 'ضمان استبدال واسترجاع خلال 3 أيام مع فحص الشحنة فور الاستلام وتوصيل لباب المنزل.'));
 
     final shippingNote = d['shipping_note']?.toString().isNotEmpty == true
         ? d['shipping_note'].toString()
-        : (baseProduct?.shippingNote != null && baseProduct!.shippingNote!.isNotEmpty
-            ? baseProduct.shippingNote!
+        : (baseProduct != null && baseProduct.shippingNote.isNotEmpty
+            ? baseProduct.shippingNote
             : (details['shipping_note']?.toString().isNotEmpty == true
                 ? details['shipping_note'].toString()
                 : 'توصيل سريع ومباشر لباب المنزل عبر مندوب شبيك في أمانة العاصمة والمحافظات.'));

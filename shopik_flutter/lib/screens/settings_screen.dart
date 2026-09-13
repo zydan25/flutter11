@@ -1,1 +1,1 @@
-export 'app_pages.dart' show SettingsScreen;
+export 'reference_aliases.dart' show SettingsScreen;

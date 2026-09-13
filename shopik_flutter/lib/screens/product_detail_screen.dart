@@ -1,1 +1,1 @@
-export 'app_pages.dart' show ProductDetailScreen;
+export 'reference_aliases.dart' show ProductDetailScreen;

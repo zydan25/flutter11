@@ -12,6 +12,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   build-web:
     name: Build Flutter Web
@@ -35,10 +39,19 @@ jobs:
           cd shopik_flutter
           flutter pub get
 
+      - name: Determine base href
+        id: base-href
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          if [ -z "$REPO_NAME" ]; then
+            REPO_NAME="flutter11"
+          fi
+          echo "href=/$REPO_NAME/" >> $GITHUB_OUTPUT
+
       - name: Build Flutter Web
         run: |
           cd shopik_flutter
-          flutter build web --release --base-href /
+          flutter build web --release --no-wasm --base-href "${{ steps.base-href.outputs.href }}" || flutter build web --release --base-href "${{ steps.base-href.outputs.href }}"
 
       - name: Sync build output to flutter_web_dist
         run: |
@@ -51,3 +64,26 @@ jobs:
           name: flutter-web-build
           path: shopik_flutter/build/web/
           retention-days: 14
+
+      - name: Setup Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: shopik_flutter/build/web
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build-web
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -82,6 +82,7 @@ class Product {
     this.sizes = const [],
     this.details = const {},
     this.hashtags = const [],
+    this.customCategoryName,
     this.sku = '',
     this.material = '',
     this.shippingNote = '',
@@ -117,6 +118,7 @@ class Product {
   final List<Map<String, dynamic>> sizes;
   final Map<String, dynamic> details;
   final List<String> hashtags;
+  final String? customCategoryName;
   final String sku;
   final String material;
   final String shippingNote;
@@ -236,6 +238,7 @@ class Product {
       sizes: szs,
       details: detailsMap,
       hashtags: htags,
+      customCategoryName: j['custom_category_name']?.toString(),
       sku: '${j['sku'] ?? ''}',
       material: '${j['material'] ?? ''}',
       shippingNote: '${j['shipping_note'] ?? ''}',

@@ -1,1 +1,1 @@
-export 'app_pages.dart' show GamesScreen;
+export 'reference_aliases.dart' show GamesScreen;
