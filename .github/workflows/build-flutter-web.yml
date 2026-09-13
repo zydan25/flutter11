@@ -1,0 +1,53 @@
+name: Build and Deploy SHOPIK Flutter Web Preview
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-web:
+    name: Build Flutter Web
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Verify Flutter version
+        run: flutter --version
+
+      - name: Install Flutter dependencies
+        run: |
+          cd shopik_flutter
+          flutter pub get
+
+      - name: Build Flutter Web
+        run: |
+          cd shopik_flutter
+          flutter build web --release --base-href /
+
+      - name: Sync build output to flutter_web_dist
+        run: |
+          mkdir -p flutter_web_dist
+          cp -r shopik_flutter/build/web/* flutter_web_dist/
+
+      - name: Upload Web Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-web-build
+          path: shopik_flutter/build/web/
+          retention-days: 14
