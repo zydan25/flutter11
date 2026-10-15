@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api_client.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
@@ -368,6 +370,8 @@ class _ServiceFormState extends State<_ServiceForm> {
   Map<String, dynamic>? _item;
   bool _busy = false;
   Map<String, dynamic>? _pendingTransaction;
+  String? _pendingKey;
+  String? _lastPersistedStatus;
   bool _blockedAfterAmbiguousSubmit = false;
   int _elapsed = 0;
   String _progress = 'جاري إرسال الطلب إلى الخادم...';
