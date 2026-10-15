@@ -682,6 +682,7 @@ class _ServiceFormState extends State<_ServiceForm> {
           }
           if (activeKey.isNotEmpty && activeId.isNotEmpty && _isTerminal(activeStatus)) {
             await _clearPersistedTransaction(activeKey);
+            if (!mounted) return;
           }
         }
       } catch (_) {
@@ -736,8 +737,12 @@ class _ServiceFormState extends State<_ServiceForm> {
     );
     if (confirmed != true || !mounted) return;
     final idempotencyKey = await _idempotencyKeyFor(requestKey);
-    await _markAmbiguousRequest(requestKey);
     if (!mounted) return;
+    await _markAmbiguousRequest(requestKey);
+    if (!mounted) {
+      await _clearPersistedTransaction(requestKey, clearIdempotencyKey: false);
+      return;
+    }
     setState(() {
       _busy = true;
       _elapsed = 0;
