@@ -59,23 +59,31 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
   Future<void> _checkOperation(Map<String, dynamic> op) async {
     final opId = '${op['id'] ?? ''}'.trim();
-    showDialog(
+    if (opId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFB45309),
+          content: Text('لا يوجد مرجع للعملية يمكن فحصه من الخادم.'),
+        ),
+      );
+      return;
+    }
+
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              CircularProgressIndicator(color: Color(0xFF8B1D3B)),
-              SizedBox(height: 12),
-              Text('جاري فحص حالة العملية من المزود...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ],
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 12),
+                Text('جاري فحص العملية من الخادم...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
           ),
         ),
       ),
@@ -83,52 +91,50 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
     try {
       final app = context.read<AppController>();
-      if (opId.isNotEmpty) {
-        final result = await app.api.checkOperationStatus(opId);
-        if (mounted) Navigator.pop(context);
-        
+      final result = await app.api.checkOperationStatus(opId);
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+
+      final rawStatus = '${result['status'] ?? ''}'.trim().toLowerCase();
+      final isSuccess = const {'success', 'completed', 'done', 'executed'}.contains(rawStatus);
+      final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(rawStatus);
+      final isManualReview = rawStatus == 'manual_review';
+      final note = '${result['error_message'] ?? result['message'] ?? result['detail'] ?? ''}'.trim();
+
+      if (mounted) {
         setState(() {
-          op['status'] = 'جاهز';
-          op['notes'] = result['notes'] ?? result['message'] ?? 'تم تجهيز العملية من نظام المزود تزامن مباشر! الرد: تصحيح الجاهزية بعد التأكد';
+          op['status'] = rawStatus.isEmpty ? 'unknown' : rawStatus;
+          if (note.isNotEmpty) op['notes'] = note;
+          op['last_checked_at'] = DateTime.now().toIso8601String();
         });
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF059669),
-              behavior: SnackBarBehavior.floating,
-              content: Row(
-                children: const [
-                  Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text('العملية جاهز: تم التأكد من تنفيذها بنجاح لدى المزود', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-      } else {
-        if (mounted) Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Color(0xFF059669),
-              content: Text('العملية جاهزة ومكتملة بالفعل'),
-            ),
-          );
-        }
+        final message = isSuccess
+            ? 'أكد الخادم نجاح العملية.'
+            : isFailure
+                ? (rawStatus == 'refunded' ? 'أفاد الخادم أن الرصيد أُعيد.' : 'أفاد الخادم أن العملية لم تنجح.')
+                : isManualReview
+                    ? 'العملية تحتاج إلى مراجعة تشغيلية؛ لا تكرر السداد.'
+                    : 'لم تصل نتيجة نهائية بعد؛ حالة العملية: ${rawStatus.isEmpty ? 'غير معروفة' : rawStatus}.';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: isSuccess
+                ? const Color(0xFF059669)
+                : isFailure
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFFB45309),
+            behavior: SnackBarBehavior.floating,
+            content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
+        Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: const Color(0xFF059669),
-            content: Text('العملية جاهز: الرد تصحيح الجاهزية بعد الفحص المباشر'),
+            backgroundColor: const Color(0xFFB45309),
+            behavior: SnackBarBehavior.floating,
+            content: Text('تعذر التحقق من حالة العملية؛ لم نغيرها إلى جاهزة: $e'),
           ),
         );
       }
