@@ -86,30 +86,100 @@ class ApiClient {
     }
   }
   Future<Map<String,dynamic>> serviceRequest({required int serviceId,required Map<String,dynamic> payload,String? itemType,int? itemId,String? idempotencyKey}) async {final key=idempotencyKey??'${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1<<30)}';return Map<String,dynamic>.from(await post('/v2/services/requests/',{'service_id':serviceId,'payload':payload,if(itemType!=null)'item_type':itemType,if(itemId!=null)'item_id':itemId},idempotencyKey:key));}
-  Future<Map<String,dynamic>> serviceTransaction(String id) async=>Map<String,dynamic>.from(await get('/v2/services/requests/$id/'));
-  Future<Map<String,dynamic>> serviceProviderCheck(String id) async=>Map<String,dynamic>.from(await get('/v2/services/requests/$id/provider-check/'));
-  Future<Map<String,dynamic>> submitAndPollServiceRequest({required int serviceId, required Map<String,dynamic> payload, String? itemType, int? itemId, int maxPolls = 12}) async {
-    final initial = await serviceRequest(serviceId: serviceId, payload: payload, itemType: itemType, itemId: itemId);
-    final String? uuid = initial['id']?.toString();
-    if (uuid == null || uuid.isEmpty) return initial;
+  Future<Map<String,dynamic>> serviceTransaction(String id) async =>
+      Map<String,dynamic>.from(await get('/v2/services/requests/$id/'));
 
-    Map<String, dynamic> latest = initial;
-    for (int i = 0; i < maxPolls; i++) {
-      final st = '${latest['status'] ?? ''}'.toLowerCase().trim();
-      final res = latest['result'];
-      final isDone = st == 'success' || st == 'completed' || st == 'done';
-      final isFailed = st == 'failed' || st == 'error' || st == 'rejected' || st == 'refunded';
-      final hasResultContent = res is Map && (res.isNotEmpty || res['resultCode'] == '0' || res['balance'] != null || res['offers'] != null);
+  static const Set<String> _terminalServiceStatuses = {
+    'success', 'completed', 'done', 'executed',
+    'failed', 'error', 'rejected', 'refunded', 'manual_review',
+  };
 
-      if (isDone || isFailed || hasResultContent) {
-        return latest;
-      }
-      await Future.delayed(const Duration(milliseconds: 1000));
-      try {
-        latest = await serviceTransaction(uuid);
-      } catch (_) {}
+  String _normalizedServiceStatus(dynamic raw) => '${raw ?? ''}'.trim().toLowerCase();
+
+  bool _isTerminalServiceStatus(dynamic raw) =>
+      _terminalServiceStatuses.contains(_normalizedServiceStatus(raw));
+
+  /// Polls the server transaction record only. An arbitrary non-empty "result"
+  /// object is not proof that a paid operation has finished.
+  Future<Map<String,dynamic>> waitForServiceTransaction(
+    String id, {
+    Map<String,dynamic> initial = const <String,dynamic>{},
+    Duration maxWait = const Duration(seconds: 40),
+    Duration pollInterval = const Duration(seconds: 2),
+    void Function(Map<String,dynamic>)? onProgress,
+  }) async {
+    if (id.trim().isEmpty) {
+      return <String,dynamic>{...initial, '_client_state': 'missing_id'};
     }
-    return latest;
+
+    var latest = Map<String,dynamic>.from(initial);
+    final deadline = DateTime.now().add(maxWait);
+    onProgress?.call(Map<String,dynamic>.from(latest));
+
+    while (true) {
+      if (_isTerminalServiceStatus(latest['status'])) return latest;
+
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) break;
+
+      final delayMs = min(pollInterval.inMilliseconds, remaining.inMilliseconds);
+      if (delayMs > 0) {
+        await Future.delayed(Duration(milliseconds: delayMs));
+      }
+      if (!DateTime.now().isBefore(deadline)) break;
+
+      try {
+        latest = await serviceTransaction(id);
+      } catch (_) {
+        // A single polling failure must not turn an accepted transaction into
+        // either success or failure. Keep its last server-confirmed state.
+      }
+      onProgress?.call(Map<String,dynamic>.from(latest));
+    }
+
+    if (_isTerminalServiceStatus(latest['status'])) return latest;
+    return <String,dynamic>{
+      ...latest,
+      '_client_wait_timed_out': true,
+      '_client_wait_seconds': maxWait.inSeconds,
+    };
+  }
+
+  /// Creates one server transaction, then waits for its authoritative status.
+  /// The same idempotency key is used for the submission; polling never
+  /// resubmits a paid request.
+  Future<Map<String,dynamic>> submitAndPollServiceRequest({
+    required int serviceId,
+    required Map<String,dynamic> payload,
+    String? itemType,
+    int? itemId,
+    String? idempotencyKey,
+    Duration maxWait = const Duration(seconds: 40),
+    Duration pollInterval = const Duration(seconds: 2),
+    void Function(Map<String,dynamic>)? onProgress,
+  }) async {
+    final key = idempotencyKey ??
+        'service-${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 30)}';
+    final initial = await serviceRequest(
+      serviceId: serviceId,
+      payload: payload,
+      itemType: itemType,
+      itemId: itemId,
+      idempotencyKey: key,
+    );
+
+    final id = '${initial['id'] ?? ''}'.trim();
+    if (id.isEmpty) {
+      return <String,dynamic>{...initial, '_client_state': 'missing_id'};
+    }
+
+    return waitForServiceTransaction(
+      id,
+      initial: initial,
+      maxWait: maxWait,
+      pollInterval: pollInterval,
+      onProgress: onProgress,
+    );
   }
   Future<Map<String,dynamic>> queryYemenMobileOffers(String phone) async => submitAndPollServiceRequest(serviceId: 7, payload: {'mobile': phone.trim()});
   Future<Map<String,dynamic>> queryYemenMobileBalance(String phone) async => submitAndPollServiceRequest(serviceId: 6, payload: {'mobile': phone.trim()});
