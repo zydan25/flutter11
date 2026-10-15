@@ -510,6 +510,33 @@ class _ServiceFormState extends State<_ServiceForm> {
       return;
     }
     final payload = _payload();
+    final serviceId = int.tryParse('${widget.service['id'] ?? ''}');
+    if (serviceId == null || serviceId <= 0) {
+      showAppToast(context, 'معرّف الخدمة غير صالح في كتالوج الخادم.', isError: true);
+      return;
+    }
+
+    final requestKey = _requestFingerprint(serviceId, payload);
+    _pendingKey = requestKey;
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final storedTransaction = preferences.getString(requestKey);
+    if (storedTransaction != null && storedTransaction.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(storedTransaction);
+        if (decoded is Map) {
+          final previous = Map<String, dynamic>.from(decoded);
+          if ('${previous['id'] ?? ''}'.trim().isNotEmpty) {
+            setState(() => _pendingTransaction = previous);
+            await _reviewPendingTransaction();
+            return;
+          }
+        }
+      } catch (_) {
+        await preferences.remove(requestKey);
+      }
+    }
+
     final selectedName = '${_item?['name'] ?? ''}';
     final price = _item == null ? null : num.tryParse('${_item!['price'] ?? ''}');
     final summary = _item == null
@@ -527,22 +554,31 @@ class _ServiceFormState extends State<_ServiceForm> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    final id = int.tryParse('${widget.service['id'] ?? ''}');
-    if (id == null || id <= 0) {
-      showAppToast(context, 'معرّف الخدمة غير صالح في كتالوج الخادم.', isError: true);
-      return;
-    }
-    setState(() { _busy = true; _elapsed = 0; _progress = 'جاري إرسال الطلب إلى الخادم...'; });
+    setState(() {
+      _busy = true;
+      _elapsed = 0;
+      _lastPersistedStatus = null;
+      _progress = 'جاري إرسال الطلب إلى الخادم...';
+    });
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) { if (mounted && _busy) setState(() => _elapsed++); });
     try {
       final transaction = await widget.app.requestService(
-        serviceId: id,
+        serviceId: serviceId,
         payload: payload,
         itemType: _item == null ? null : '${_item!['type'] ?? ''}',
         itemId: _item == null ? null : int.tryParse('${_item!['id'] ?? ''}'),
         maxWait: const Duration(seconds: 40),
-        onProgress: (tx) { if (mounted) setState(() => _progress = _progressText('${tx['status'] ?? ''}')); },
+        onProgress: (tx) {
+          if (!mounted) return;
+          final currentStatus = '${tx['status'] ?? ''}'.trim().toLowerCase();
+          setState(() => _progress = _progressText(currentStatus));
+          final txId = '${tx['id'] ?? ''}'.trim();
+          if (txId.isNotEmpty && _lastPersistedStatus == null) {
+            _lastPersistedStatus = currentStatus;
+            _persistPendingTransaction(requestKey, tx);
+          }
+        },
       );
       _timer?.cancel();
       if (!mounted) return;
