@@ -1012,12 +1012,42 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
   }
 
+  String _transactionStatus(Map<String, dynamic> tx) =>
+      '${tx['status'] ?? ''}'.trim().toLowerCase();
+
+  bool _isTransactionSuccess(Map<String, dynamic> tx) =>
+      const {'success', 'completed', 'done', 'executed'}.contains(_transactionStatus(tx));
+
+  bool _isTransactionPending(Map<String, dynamic> tx) =>
+      const {'accepted', 'queued', 'pending', 'pending_provider', 'processing', 'manual_review'}.contains(_transactionStatus(tx)) ||
+      tx['_client_wait_timed_out'] == true;
+
+  String _transactionMessage(Map<String, dynamic> tx) =>
+      '${tx['error_message'] ?? tx['message'] ?? tx['detail'] ?? tx['error'] ?? ''}'.trim();
+
+  void _showInquiryNotice(String message, {bool isError = false}) {
+    if (!mounted) return;
+    setState(() => operatorRestrictedToast = message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red.shade700 : AppColors.burgundy,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
   Future<void> _runInquiry(String type, {bool quiet = false}) async {
     final currentPhone = phone.text.trim();
-    if (currentPhone.isEmpty) return;
+    final normalizedPhone = currentPhone.replaceAll(RegExp(r'\D'), '');
+    if (currentPhone.isEmpty || normalizedPhone.length < 7) {
+      if (!quiet) _showInquiryNotice('أدخل رقم الهاتف أو الحساب كاملًا قبل الاستعلام.', isError: true);
+      return;
+    }
 
-    if (!quiet) {
-      showDialog(
+    final loadingDialogShown = !quiet;
+    if (loadingDialogShown) {
+      showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) => const AlertDialog(
@@ -1026,7 +1056,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             children: [
               CircularProgressIndicator(color: AppColors.burgundy),
               SizedBox(width: 16),
-              Text('جاري الاستعلام اللحظي من المشغل...', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              Expanded(child: Text('جاري الاستعلام من الخادم وانتظار رد المشغل...', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold))),
             ],
           ),
         ),
@@ -1035,134 +1065,187 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     try {
       final app = Provider.of<AppController>(context, listen: false);
-      if (currentOpId == 'yemen_mobile') {
-        if (type == 'balance') {
-          final tx = await app.api.queryYemenMobileBalance(currentPhone);
-          final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
-          final bal = res['balance']?.toString() ?? '436.04';
-          final mType = res['mobileType']?.toString() == '2' ? 'فوترة | شريحة' : 'دفع مسبق | شريحة';
-          await app.refreshWalletAndReports();
-          if (mounted) {
-            setState(() {
-              ymPhoneBalance = '$bal ر.ي';
-              ymPhoneType = mType;
-              balanceInquiryBanner = 'رصيد الهاتف: $bal ر.ي • $mType • سلفة: ${ymLoanStatus == "loan" ? "$ymLoanAmount ر.ي" : "لا توجد سلفة"}';
-            });
-          }
-        } else {
-          // offers query (service 7) provides active offers, loan status, mobile type, and balance
-          final tx = await app.api.queryYemenMobileOffers(currentPhone);
-          final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
-          
-          String? liveBal = res['balance']?.toString();
-          if (liveBal == null || liveBal.isEmpty) {
-            try {
-              final bTx = await app.api.queryYemenMobileBalance(currentPhone);
-              final bRes = (bTx['result'] is Map) ? bTx['result'] as Map<String, dynamic> : <String, dynamic>{};
-              if (bRes['balance'] != null) {
-                liveBal = bRes['balance'].toString();
-              }
-            } catch (_) {}
-          }
-          
-          await app.refreshWalletAndReports();
+      if (mounted) {
+        setState(() {
+          operatorRestrictedToast = null;
+          if (type == 'balance') balanceInquiryBanner = null;
+        });
+      }
 
-          if (mounted) {
-            setState(() {
-              if (res['offers'] is List) {
-                final list = res['offers'] as List;
-                if (list.isNotEmpty) {
-                  activeSubscriptions = list.map((item) {
-                    final o = item is Map ? item : <String, dynamic>{};
-                    return _ActiveSubItem(
-                      id: o['offerId']?.toString() ?? 'sub-${o['offerName']}',
-                      name: o['offerName']?.toString() ?? 'اشتراك نشط',
-                      startDate: o['offerStartDate']?.toString() ?? '',
-                      endDate: o['offerEndDate']?.toString() ?? '',
-                      type: (o['offerName']?.toString().contains('4G') ?? false) ? '4G' : 'باقة',
-                    );
-                  }).toList();
-                }
-              }
-              final bool hasLoan = res['loan'] == true || (res['loan_amount'] != null && res['loan_amount'].toString().isNotEmpty && res['loan_amount'].toString() != '0' && res['loan_amount'].toString() != '0.00');
-              ymLoanStatus = hasLoan ? 'loan' : 'none';
-              if (res['loan_amount'] != null && res['loan_amount'].toString().isNotEmpty) {
-                ymLoanAmount = double.tryParse(res['loan_amount'].toString()) ?? 122.0;
-              }
-              final mType = res['mobileType']?.toString() == '2' ? 'فوترة | شريحة' : 'دفع مسبق | شريحة';
-              ymPhoneType = mType;
-              if (liveBal != null && liveBal.isNotEmpty) {
-                ymPhoneBalance = '$liveBal ر.ي';
-              } else if (res['balance'] != null && res['balance'].toString().isNotEmpty) {
-                ymPhoneBalance = '${res['balance']} ر.ي';
-              }
-            });
+      if (currentOpId == 'yemen_mobile' && type == 'balance') {
+        final tx = await app.api.queryYemenMobileBalance(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام الرصيد إلى الخادم، وما زلنا ننتظر الرد. أعد الفحص بعد قليل.');
+            return;
           }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'لم يؤكد الخادم نجاح استعلام الرصيد.');
         }
-      } else if (currentOpId == 'yemen4g') {
-        final tx = await app.api.queryYemen4g(currentPhone);
-        final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('اكتمل الطلب دون تفاصيل رصيد قابلة للعرض من الخادم.');
+        final res = Map<String, dynamic>.from(rawResult);
+        final balance = '${res['balance'] ?? ''}'.trim();
+        if (balance.isEmpty) throw Exception('لم يتضمن رد الخادم قيمة رصيد الهاتف.');
+        final rawMobileType = '${res['mobileType'] ?? ''}'.trim();
+        final mobileType = rawMobileType == '2'
+            ? 'فوترة | شريحة'
+            : rawMobileType == '1'
+                ? 'دفع مسبق | شريحة'
+                : 'نوع الشريحة غير محدد من الخادم';
+        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
+        final hasLoan = res['loan'] == true || loanAmount > 0;
+        try { await app.refreshWalletAndReports(); } catch (_) {}
         if (mounted) {
           setState(() {
-            final b = res['avblnce']?.toString() ?? (res['balance']?.toString() ?? '14.54 GB');
-            final p = res['baga_amount'] != null
-                ? '${res['baga_amount']} ر.ي (اقل سداد: ${res['minamtobill'] ?? res['baga_amount']})'
-                : '2,400 ر.ي (اقل مبلغ سداد: 2,400)';
-            final s = '${res['size'] ?? "4G 15"} سرعة: ${res['speed'] ?? "4G"}';
-            final exp = res['expdate']?.toString() ?? '2026-10-07 00:00:00';
+            ymPhoneBalance = '$balance ر.ي';
+            ymPhoneType = mobileType;
+            ymLoanAmount = loanAmount;
+            ymLoanStatus = hasLoan ? 'loan' : 'none';
+            balanceInquiryBanner = 'رصيد الهاتف: $balance ر.ي • $mobileType • السلفة: ${hasLoan ? '$loanAmount ر.ي' : 'لا توجد سلفة وفق رد الخادم'}';
+          });
+        }
+      } else if (currentOpId == 'yemen_mobile' && type == 'offers') {
+        final tx = await app.api.queryYemenMobileOffers(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام باقات يمن موبايل إلى الخادم، وما زلنا ننتظر النتيجة. لا تكرر الاستعلام الآن.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'لم يؤكد الخادم نجاح استعلام الباقات.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل باقات قابلة للعرض.');
+        final res = Map<String, dynamic>.from(rawResult);
+
+        String? liveBalance = '${res['balance'] ?? ''}'.trim();
+        if (liveBalance.isEmpty) {
+          try {
+            final balanceTx = await app.api.queryYemenMobileBalance(normalizedPhone);
+            if (_isTransactionSuccess(balanceTx) && balanceTx['result'] is Map) {
+              final balanceResult = Map<String, dynamic>.from(balanceTx['result'] as Map);
+              final fetchedBalance = '${balanceResult['balance'] ?? ''}'.trim();
+              if (fetchedBalance.isNotEmpty) liveBalance = fetchedBalance;
+            }
+          } catch (_) {}
+        }
+
+        final subscriptions = <_ActiveSubItem>[];
+        final rawOffers = res['offers'];
+        if (rawOffers is List) {
+          for (final item in rawOffers.whereType<Map>()) {
+            final offer = Map<String, dynamic>.from(item);
+            final offerName = '${offer['offerName'] ?? offer['name'] ?? 'اشتراك نشط'}';
+            subscriptions.add(_ActiveSubItem(
+              id: '${offer['offerId'] ?? offer['id'] ?? 'sub-$offerName'}',
+              name: offerName,
+              startDate: '${offer['offerStartDate'] ?? offer['startDate'] ?? ''}',
+              endDate: '${offer['offerEndDate'] ?? offer['endDate'] ?? ''}',
+              type: offerName.contains('4G') ? '4G' : 'باقة',
+            ));
+          }
+        }
+
+        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
+        final hasLoan = res['loan'] == true || loanAmount > 0;
+        final rawMobileType = '${res['mobileType'] ?? ''}'.trim();
+        final mobileType = rawMobileType == '2'
+            ? 'فوترة | شريحة'
+            : rawMobileType == '1'
+                ? 'دفع مسبق | شريحة'
+                : 'نوع الشريحة غير محدد من الخادم';
+        if (mounted) {
+          setState(() {
+            activeSubscriptions = subscriptions;
+            ymLoanStatus = hasLoan ? 'loan' : 'none';
+            ymLoanAmount = loanAmount;
+            ymPhoneType = mobileType;
+            if (liveBalance != null && liveBalance!.isNotEmpty) ymPhoneBalance = '$liveBalance ر.ي';
+          });
+        }
+        if (rawOffers is! List) {
+          _showInquiryNotice('وصل رد الخادم، لكنه لم يتضمن قائمة الباقات المتوقعة. تحقق من إعدادات خدمة الباقات.', isError: true);
+        }
+      } else if (currentOpId == 'yemen4g') {
+        final tx = await app.api.queryYemen4g(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام يمن فورجي إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد استعلام يمن فورجي من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل يمن فورجي.');
+        final res = Map<String, dynamic>.from(rawResult);
+        if (mounted) {
+          setState(() {
             fourGInquiryData = {
-              'balance': b,
-              'packagePrice': p,
-              'speed': s,
-              'expiry': exp,
+              'balance': '${res['avblnce'] ?? res['balance'] ?? 'غير متوفر من الخادم'}',
+              'packagePrice': res['baga_amount'] == null ? 'غير متوفر من الخادم' : '${res['baga_amount']} ر.ي (أقل مبلغ سداد: ${res['minamtobill'] ?? res['baga_amount']})',
+              'speed': '${res['size'] ?? ''}${res['speed'] == null ? '' : ' سرعة: ${res['speed']}'}'.trim(),
+              'expiry': '${res['expdate'] ?? 'غير متوفر من الخادم'}',
             };
           });
         }
       } else if (currentOpId == 'yemen_net') {
-        final tx = await app.api.queryYemenNet(currentPhone);
-        final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
+        final typeParam = netTab == 'phone' ? 'phone' : 'adsl';
+        final tx = await app.api.queryYemenNet(normalizedPhone, type: typeParam);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام يمن نت إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد استعلام يمن نت من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل يمن نت.');
+        final res = Map<String, dynamic>.from(rawResult);
         if (mounted) {
           setState(() {
             netInquiryData = {
-              'balance': res['balance']?.toString() ?? 'Gigabyte(s) 0.00',
-              'packagePrice': res['package_price']?.toString() ?? '5,100 اقل مبلغ سداد: 250',
-              'speed': res['speed']?.toString() ?? '4 ميجا ADSL',
-              'expiry': res['expiry']?.toString() ?? '2026-10-15 18:43:00',
+              'balance': '${res['balance'] ?? 'غير متوفر من الخادم'}',
+              'packagePrice': '${res['package_price'] ?? 'غير متوفر من الخادم'}',
+              'speed': '${res['speed'] ?? 'غير متوفر من الخادم'}',
+              'expiry': '${res['expiry'] ?? 'غير متوفر من الخادم'}',
             };
           });
         }
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          if (type == 'sulfa') {
-            ymLoanStatus = ymLoanStatus == 'none' ? 'loan' : 'none';
-            ymLoanAmount = 122.0;
-          } else if (type == 'balance') {
-            balanceInquiryBanner = 'رصيد الهاتف: 436.04 ر.ي • شريحة دفع مسبق • سلفة: 0.00 ر.ي';
-          } else if (currentOpId == 'yemen4g') {
-            fourGInquiryData = {
-              'balance': '14.54 GB',
-              'packagePrice': '2,400 اقل مبلغ سداد: 2400',
-              'speed': '4G 15 سرعة: 4G',
-              'expiry': '2026-10-07 00:00:00',
-            };
-          } else if (currentOpId == 'yemen_net') {
-            netInquiryData = {
-              'balance': '32.4 جيجابايت',
-              'packagePrice': '3,150 اقل سداد: 500',
-              'speed': '4 ميجا ADSL',
-              'expiry': '2026-10-05 (بعد 25 يوم)',
-            };
+      } else if (type == 'sulfa') {
+        final tx = await app.api.queryYemenMobileOffers(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال فحص السلفة إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
           }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد فحص السلفة من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map) throw Exception('لم يرجع الخادم تفاصيل السلفة.');
+        final res = Map<String, dynamic>.from(rawResult);
+        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
+        if (mounted) setState(() {
+          ymLoanAmount = loanAmount;
+          ymLoanStatus = (res['loan'] == true || loanAmount > 0) ? 'loan' : 'none';
         });
       }
+    } catch (error) {
+      if (mounted) {
+        final message = 'تعذر الاستعلام من الخادم: ${error.toString().replaceFirst('Exception: ', '')}';
+        setState(() {
+          operatorRestrictedToast = message;
+          if (type == 'balance') balanceInquiryBanner = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: Colors.red.shade700, duration: const Duration(seconds: 6)),
+        );
+      }
     } finally {
-      if (!quiet && mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
+      if (loadingDialogShown && mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
       }
     }
   }
+
 
   String _getArabicAmountWords(double num) {
     final int val = num.toInt();
