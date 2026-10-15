@@ -367,6 +367,8 @@ class _ServiceFormState extends State<_ServiceForm> {
   final Map<String, String?> _choices = {};
   Map<String, dynamic>? _item;
   bool _busy = false;
+  Map<String, dynamic>? _pendingTransaction;
+  bool _blockedAfterAmbiguousSubmit = false;
   int _elapsed = 0;
   String _progress = 'جاري إرسال الطلب إلى الخادم...';
   Timer? _timer;
@@ -441,6 +443,14 @@ class _ServiceFormState extends State<_ServiceForm> {
   }
 
   Future<void> _submit() async {
+    if (_pendingTransaction != null) {
+      await _reviewPendingTransaction();
+      return;
+    }
+    if (_blockedAfterAmbiguousSubmit) {
+      showAppToast(context, 'تعذر التحقق من الطلب السابق. افحص سجل العمليات قبل إنشاء طلب جديد.', isError: true);
+      return;
+    }
     if (_busy || !(_formKey.currentState?.validate() ?? false)) return;
     if (_itemRequired && _item == null) {
       showAppToast(context, 'اختر الباقة أو الفئة المطلوبة أولًا.', isError: true);
@@ -485,6 +495,7 @@ class _ServiceFormState extends State<_ServiceForm> {
       if (!mounted) return;
       setState(() => _busy = false);
       if ('${transaction['id'] ?? ''}'.trim().isEmpty) {
+        if (mounted) setState(() => _blockedAfterAmbiguousSubmit = true);
         await _unknownReference();
         return;
       }
@@ -496,12 +507,28 @@ class _ServiceFormState extends State<_ServiceForm> {
       final finalTx = checked ?? transaction;
       final status = _statusOf(finalTx);
       try { await widget.app.refreshWalletAndReports(); } catch (_) {}
-      if (['success','completed','done','executed'].contains(status) && mounted) Navigator.of(context).pop();
+      if (['success','completed','done','executed'].contains(status)) {
+        if (mounted) {
+          setState(() => _pendingTransaction = null);
+          Navigator.of(context).pop();
+        }
+      } else if (['failed','error','rejected','refunded'].contains(status)) {
+        if (mounted) setState(() => _pendingTransaction = null);
+      } else {
+        // Keep the existing reference so the customer cannot accidentally create
+        // a second paid request while the first one is still unresolved.
+        if (mounted) setState(() => _pendingTransaction = Map<String, dynamic>.from(finalTx));
+      }
     } catch (e) {
       _timer?.cancel();
       if (!mounted) return;
       setState(() => _busy = false);
-      final reject = e is ApiException && e.statusCode < 500;
+      final reject = e is ApiException && e.statusCode >= 400 && e.statusCode < 500;
+      if (!reject && mounted) {
+        // A network/5xx error may happen after the server accepted the request.
+        // Block repeat submissions because we do not have a transaction UUID.
+        setState(() => _blockedAfterAmbiguousSubmit = true);
+      }
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -517,6 +544,29 @@ class _ServiceFormState extends State<_ServiceForm> {
     } finally {
       _timer?.cancel();
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reviewPendingTransaction() async {
+    final pending = _pendingTransaction;
+    if (_busy || pending == null) return;
+    final reviewed = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _TransactionResultDialog(app: widget.app, transaction: pending),
+    );
+    final transaction = reviewed ?? pending;
+    if (!mounted) return;
+    final status = _statusOf(transaction);
+    if (['success','completed','done','executed'].contains(status)) {
+      setState(() => _pendingTransaction = null);
+      try { await widget.app.refreshWalletAndReports(); } catch (_) {}
+      if (mounted) Navigator.of(context).pop();
+    } else if (['failed','error','rejected','refunded'].contains(status)) {
+      setState(() => _pendingTransaction = null);
+      try { await widget.app.refreshWalletAndReports(); } catch (_) {}
+    } else {
+      setState(() => _pendingTransaction = Map<String, dynamic>.from(transaction));
     }
   }
 
@@ -607,12 +657,23 @@ class _ServiceFormState extends State<_ServiceForm> {
                 SizedBox(
                   height: 47,
                   child: FilledButton.icon(
-                    onPressed: _busy ? null : _submit,
+                    onPressed: _busy || _blockedAfterAmbiguousSubmit
+                      ? null
+                      : (_pendingTransaction != null ? _reviewPendingTransaction : _submit),
                     style: FilledButton.styleFrom(backgroundColor: AppColors.burgundy),
                     icon: _busy
                       ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : Icon(kind == 'query' || kind == 'catalog' ? Icons.manage_search_rounded : Icons.lock_clock_rounded),
-                    label: Text(_busy ? 'جاري انتظار نتيجة الخادم...' : (kind == 'query' || kind == 'catalog' ? 'إرسال الاستعلام' : 'تأكيد السداد'), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900)),
+                    label: Text(
+                      _busy
+                          ? 'جاري انتظار نتيجة الخادم...'
+                          : _blockedAfterAmbiguousSubmit
+                              ? 'تحقق من سجل العمليات أولًا'
+                              : _pendingTransaction != null
+                                  ? 'فحص العملية السابقة'
+                                  : (kind == 'query' || kind == 'catalog' ? 'إرسال الاستعلام' : 'تأكيد السداد'),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
