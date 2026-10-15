@@ -639,6 +639,52 @@ class _ServiceFormState extends State<_ServiceForm> {
                 ],
                 if (_fields.isEmpty && items.isEmpty)
                   const Text('لا توجد حقول معرفة لهذه الخدمة في كتالوج الخادم. لم يتم تخمين حقول أو معرف خدمة بديل.', style: TextStyle(color: Color(0xFF92400E), fontSize: 11, height: 1.5)),
+                if (_pendingTransaction != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7E6),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(color: const Color(0xFFFDE3A7)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(children: [
+                          Icon(Icons.hourglass_top_rounded, color: Color(0xFFB45309), size: 19),
+                          SizedBox(width: 7),
+                          Expanded(child: Text('يوجد طلب سابق لم تُحسم نتيجته', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF92400E)))),
+                        ]),
+                        const SizedBox(height: 5),
+                        Text(
+                          'المرجع: ${_pendingTransaction!['id'] ?? 'غير متوفر'}',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF92400E)),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'لن نرسل طلبًا ماليًا جديدًا من هذه الشاشة. استخدم زر فحص العملية السابقة حتى تصل حالة نهائية من الخادم.',
+                          style: TextStyle(fontSize: 10, height: 1.45, color: Color(0xFF92400E)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_blockedAfterAmbiguousSubmit) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF1F2),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(color: const Color(0xFFFECDD3)),
+                    ),
+                    child: const Text(
+                      'لم يصل تأكيد أو مرجع يمكن فحصه بعد الإرسال. تم تعطيل إعادة الإرسال لتجنب تكرار الخصم. افتح سجل العمليات وتحقق من الخادم قبل إنشاء طلب جديد.',
+                      style: TextStyle(fontSize: 10.5, height: 1.5, color: Color(0xFF9F1239), fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
                 if (_busy) ...[
                   const SizedBox(height: 8),
                   Container(
