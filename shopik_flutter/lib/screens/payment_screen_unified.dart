@@ -759,7 +759,7 @@ class _ServiceFormState extends State<_ServiceForm> {
           final currentStatus = '${tx['status'] ?? ''}'.trim().toLowerCase();
           setState(() => _progress = _progressText(currentStatus));
           final txId = '${tx['id'] ?? ''}'.trim();
-          if (txId.isNotEmpty && _lastPersistedStatus == null) {
+          if (txId.isNotEmpty && _lastPersistedStatus != currentStatus) {
             _lastPersistedStatus = currentStatus;
             _persistPendingTransaction(requestKey, tx);
           }
