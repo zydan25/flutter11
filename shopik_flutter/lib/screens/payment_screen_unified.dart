@@ -597,15 +597,18 @@ class _ServiceFormState extends State<_ServiceForm> {
       final status = _statusOf(finalTx);
       try { await widget.app.refreshWalletAndReports(); } catch (_) {}
       if (['success','completed','done','executed'].contains(status)) {
+        await _clearPersistedTransaction(requestKey);
         if (mounted) {
           setState(() => _pendingTransaction = null);
           Navigator.of(context).pop();
         }
       } else if (['failed','error','rejected','refunded'].contains(status)) {
+        await _clearPersistedTransaction(requestKey);
         if (mounted) setState(() => _pendingTransaction = null);
       } else {
-        // Keep the existing reference so the customer cannot accidentally create
-        // a second paid request while the first one is still unresolved.
+        // Keep the reference locally and in preferences to prevent another
+        // request from being created if the sheet or app is reopened.
+        await _persistPendingTransaction(requestKey, finalTx);
         if (mounted) setState(() => _pendingTransaction = Map<String, dynamic>.from(finalTx));
       }
     } catch (e) {
@@ -648,13 +651,16 @@ class _ServiceFormState extends State<_ServiceForm> {
     if (!mounted) return;
     final status = _statusOf(transaction);
     if (['success','completed','done','executed'].contains(status)) {
+      await _clearPersistedTransaction(_pendingKey);
       setState(() => _pendingTransaction = null);
       try { await widget.app.refreshWalletAndReports(); } catch (_) {}
       if (mounted) Navigator.of(context).pop();
     } else if (['failed','error','rejected','refunded'].contains(status)) {
+      await _clearPersistedTransaction(_pendingKey);
       setState(() => _pendingTransaction = null);
       try { await widget.app.refreshWalletAndReports(); } catch (_) {}
     } else {
+      await _persistPendingTransaction(_pendingKey, transaction);
       setState(() => _pendingTransaction = Map<String, dynamic>.from(transaction));
     }
   }
