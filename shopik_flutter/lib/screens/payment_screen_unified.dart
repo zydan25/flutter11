@@ -390,6 +390,9 @@ class _ServiceFormState extends State<_ServiceForm> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _restoreUnresolvedTransaction();
+    });
     for (final f in _fields) {
       final key = '${f['key'] ?? ''}'.trim();
       if (key.isEmpty) continue;
@@ -465,6 +468,51 @@ class _ServiceFormState extends State<_ServiceForm> {
     return 'shopik_pending_${widget.app.user?.id ?? 0}_${serviceId}_${hash.toRadixString(16)}';
   }
 
+  String get _activeTransactionPreferenceKey =>
+      'shopik_active_transaction_${widget.app.user?.id ?? 0}';
+
+  String get _ambiguousTransactionPreferenceKey =>
+      'shopik_ambiguous_transaction_${widget.app.user?.id ?? 0}';
+
+  Future<void> _restoreUnresolvedTransaction() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    final activeRaw = preferences.getString(_activeTransactionPreferenceKey);
+    if (activeRaw != null && activeRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(activeRaw);
+        if (decoded is Map && decoded['transaction'] is Map) {
+          final active = Map<String, dynamic>.from(decoded);
+          final requestKey = '${active['request_key'] ?? ''}'.trim();
+          final tx = Map<String, dynamic>.from(active['transaction'] as Map);
+          final id = '${tx['id'] ?? ''}'.trim();
+          final status = _statusOf(tx);
+          if (requestKey.isNotEmpty && id.isNotEmpty && !_isTerminal(status)) {
+            setState(() {
+              _pendingKey = requestKey;
+              _pendingTransaction = tx;
+            });
+            return;
+          }
+          if (requestKey.isNotEmpty && id.isNotEmpty && _isTerminal(status)) {
+            await _clearPersistedTransaction(requestKey);
+          }
+        }
+      } catch (_) {
+        await preferences.remove(_activeTransactionPreferenceKey);
+      }
+    }
+
+    final ambiguousKey = preferences.getString(_ambiguousTransactionPreferenceKey);
+    if (ambiguousKey != null && ambiguousKey.isNotEmpty && mounted) {
+      setState(() {
+        _pendingKey = ambiguousKey;
+        _blockedAfterAmbiguousSubmit = true;
+      });
+    }
+  }
+
   Map<String, dynamic> _transactionForLocalRecovery(Map<String, dynamic> tx) {
     const safeKeys = {
       'id', 'service', 'service_kind', 'status', 'amount', 'currency',
@@ -481,7 +529,12 @@ class _ServiceFormState extends State<_ServiceForm> {
     if (key == null || key.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(key, jsonEncode(_transactionForLocalRecovery(tx)));
+      final safeTransaction = _transactionForLocalRecovery(tx);
+      await prefs.setString(key, jsonEncode(safeTransaction));
+      await prefs.setString(_activeTransactionPreferenceKey, jsonEncode({
+        'request_key': key,
+        'transaction': safeTransaction,
+      }));
     } catch (_) {
       // Persistence is a recovery aid; server state remains authoritative.
     }
@@ -498,6 +551,21 @@ class _ServiceFormState extends State<_ServiceForm> {
       await prefs.remove('${key}_ambiguous');
       if (clearIdempotencyKey) {
         await prefs.remove('${key}_idempotency');
+      }
+
+      final activeRaw = prefs.getString(_activeTransactionPreferenceKey);
+      if (activeRaw != null) {
+        try {
+          final active = jsonDecode(activeRaw);
+          if (active is Map && '${active['request_key'] ?? ''}' == key) {
+            await prefs.remove(_activeTransactionPreferenceKey);
+          }
+        } catch (_) {
+          await prefs.remove(_activeTransactionPreferenceKey);
+        }
+      }
+      if (prefs.getString(_ambiguousTransactionPreferenceKey) == key) {
+        await prefs.remove(_ambiguousTransactionPreferenceKey);
       }
     } catch (_) {}
   }
@@ -523,6 +591,9 @@ class _ServiceFormState extends State<_ServiceForm> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('${key}_ambiguous');
+      if (prefs.getString(_ambiguousTransactionPreferenceKey) == key) {
+        await prefs.remove(_ambiguousTransactionPreferenceKey);
+      }
     } catch (_) {}
   }
 
@@ -531,6 +602,7 @@ class _ServiceFormState extends State<_ServiceForm> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('${key}_ambiguous', true);
+      await prefs.setString(_ambiguousTransactionPreferenceKey, key);
     } catch (_) {}
   }
 
@@ -589,6 +661,41 @@ class _ServiceFormState extends State<_ServiceForm> {
     _pendingKey = requestKey;
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
+
+    final activeRaw = preferences.getString(_activeTransactionPreferenceKey);
+    if (activeRaw != null && activeRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(activeRaw);
+        if (decoded is Map && decoded['transaction'] is Map) {
+          final active = Map<String, dynamic>.from(decoded);
+          final activeKey = '${active['request_key'] ?? ''}'.trim();
+          final activeTx = Map<String, dynamic>.from(active['transaction'] as Map);
+          final activeId = '${activeTx['id'] ?? ''}'.trim();
+          final activeStatus = _statusOf(activeTx);
+          if (activeKey.isNotEmpty && activeId.isNotEmpty && !_isTerminal(activeStatus)) {
+            setState(() {
+              _pendingKey = activeKey;
+              _pendingTransaction = activeTx;
+            });
+            await _reviewPendingTransaction();
+            return;
+          }
+          if (activeKey.isNotEmpty && activeId.isNotEmpty && _isTerminal(activeStatus)) {
+            await _clearPersistedTransaction(activeKey);
+          }
+        }
+      } catch (_) {
+        await preferences.remove(_activeTransactionPreferenceKey);
+      }
+    }
+
+    final globalAmbiguousKey = preferences.getString(_ambiguousTransactionPreferenceKey);
+    if (globalAmbiguousKey != null && globalAmbiguousKey.isNotEmpty) {
+      _pendingKey = globalAmbiguousKey;
+      setState(() => _blockedAfterAmbiguousSubmit = true);
+      return;
+    }
+
     final storedTransaction = preferences.getString(requestKey);
     if (storedTransaction != null && storedTransaction.isNotEmpty) {
       try {
