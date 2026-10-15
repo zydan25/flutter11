@@ -724,20 +724,45 @@ class OperationDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final opId = '${operation['id'] ?? '32ce0ab6-67d6-481b-a4fc-70ec30ba75a3'}';
+    final rawOpId = '${operation['id'] ?? ''}'.trim();
+    final opId = rawOpId.isEmpty ? 'غير متوفر' : rawOpId;
     final shortTitle = opId.length > 12 ? '${opId.substring(0, 12)}...' : opId;
-    final service = '${operation['service'] ?? operation['packageName'] ?? 'freefire'}';
-    final type = '${operation['type'] ?? 'دفع مسبق'}';
+    final service = '${operation['service'] ?? operation['packageName'] ?? 'خدمة غير محددة'}';
+    final type = '${operation['type'] ?? 'غير محدد'}';
     final phone = '${operation['phone'] ?? operation['mobile'] ?? ''}'.trim();
-    final amount = double.tryParse('${operation['amount'] ?? 1200}') ?? 1200.0;
-    final createdAt = '${operation['created_at'] ?? '2026-09-10T12:19:56.659877+00:00'}';
-    final completedAt = '${operation['completed_at'] ?? '2026-09-10T12:20:31.589978+00:00'}';
-    final readiness = '${operation['status'] ?? 'جاهز'}';
-    final stateCode = '${operation['state_code'] ?? operation['state'] ?? 'refunded'}';
-    final chipCode = '${operation['chip_code'] ?? '7bc188ad33bec2c1'}';
-    final notes = '${operation['notes'] ?? 'تم تجهيز العملية من نظام المزود تزامن مباشر! الرد: تصحيح الجاهزية بعد التأكد'}';
-    final cancelReason = '${operation['cancel_reason'] ?? '---'}';
-    final transferNumber = '${operation['transfer_number'] ?? '---'}';
+    final amount = double.tryParse('${operation['amount'] ?? ''}') ?? 0.0;
+    final createdAt = '${operation['created_at'] ?? 'غير متوفر'}';
+    final completedAt = '${operation['completed_at'] ?? 'لم تكتمل بعد'}';
+    final readiness = '${operation['status'] ?? 'unknown'}'.trim();
+    final normalizedStatus = readiness.toLowerCase();
+    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(normalizedStatus) ||
+        readiness.contains('جاهز');
+    final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(normalizedStatus);
+    final isReview = normalizedStatus == 'manual_review';
+    final readinessLabel = isReady
+        ? 'تم تأكيد النجاح'
+        : isFailure
+            ? (normalizedStatus == 'refunded' ? 'أُعيد الرصيد' : 'فشل')
+            : isReview
+                ? 'قيد المراجعة'
+                : 'تم الإرسال / بانتظار النتيجة';
+    final readinessColor = isReady
+        ? const Color(0xFF2E7D32)
+        : isFailure
+            ? const Color(0xFFC62828)
+            : const Color(0xFFB45309);
+    final readinessIcon = isReady
+        ? Icons.check_circle_rounded
+        : isFailure
+            ? Icons.cancel_rounded
+            : isReview
+                ? Icons.support_agent_rounded
+                : Icons.hourglass_top_rounded;
+    final stateCode = '${operation['state_code'] ?? operation['state'] ?? 'غير متوفر'}';
+    final chipCode = '${operation['chip_code'] ?? 'غير متوفر'}';
+    final notes = '${operation['notes'] ?? operation['message'] ?? 'لا توجد ملاحظات من الخادم'}';
+    final cancelReason = '${operation['cancel_reason'] ?? 'غير متوفر'}';
+    final transferNumber = '${operation['transfer_number'] ?? 'غير متوفر'}';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -758,7 +783,7 @@ class OperationDetailScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.share_rounded, color: Colors.white, size: 20),
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nالمبلغ: $amount ر.ي\nالحالة: جاهز'));
+              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nالمبلغ: $amount ر.ي\nالحالة: $readinessLabel'));
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('تم نسخ تفاصيل العملية للمشاركة')),
               );
@@ -769,11 +794,11 @@ class OperationDetailScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // 1. Big Green Banner: العملية جاهز (Matching Screenshot 4)
+          // Report the status received from the backend; never synthesize success.
           Container(
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
             decoration: BoxDecoration(
-              color: const Color(0xFF2E7D32),
+              color: readinessColor,
               borderRadius: BorderRadius.circular(12),
               boxShadow: const [
                 BoxShadow(color: Color(0x1A000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -781,15 +806,14 @@ class OperationDetailScreen extends StatelessWidget {
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Icon(Icons.check_circle_rounded, color: Colors.white, size: 24),
-                SizedBox(width: 8),
-                Text(
-                  'العملية جاهز',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
+              children: [
+                Icon(readinessIcon, color: Colors.white, size: 24),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    readinessLabel,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
                   ),
                 ),
               ],
@@ -823,7 +847,7 @@ class OperationDetailScreen extends StatelessWidget {
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('تاريخ التجهيز', completedAt),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
-                _buildDetailRow('الجاهزية', readiness, isGreen: true),
+                _buildDetailRow('الحالة من الخادم', readinessLabel, isGreen: isReady),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('الحالة', stateCode),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
