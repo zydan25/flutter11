@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../core/api_client.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
 import 'screen_common.dart';
@@ -2027,7 +2028,222 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  // DIALOG 3: WAITING DIALOG WITH 8 MULTI-COLOR ROTATING DOTS (مطابقة تامة للصورة 3)
+  String _paymentStorageKey(AppController app) =>
+      'shopik_active_payment_-${app.user?.id ?? 0}';
+
+  String _paymentFingerprint({
+    required AppController app,
+    required int serviceId,
+    required String targetPhone,
+    required double amount,
+    int? itemId,
+    String? itemType,
+  }) {
+    final source = '${app.user?.id ?? 0}|$serviceId|$targetPhone|${amount.toStringAsFixed(2)}|${itemId ?? ''}|${itemType ?? ''}';
+    var hash = 0x811c9dc5;
+    for (final byte in source.codeUnits) {
+      hash ^= byte;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return hash.toRadixString(16);
+  }
+
+  Future<Map<String, dynamic>?> _readActivePayment(AppController app) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_paymentStorageKey(app));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveActivePayment(
+    AppController app, {
+    required String fingerprint,
+    required String idempotencyKey,
+    String? transactionId,
+    String? status,
+    required int serviceId,
+    required String serviceName,
+    required String targetPhone,
+    required double amount,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_paymentStorageKey(app), jsonEncode({
+        'fingerprint': fingerprint,
+        'idempotency_key': idempotencyKey,
+        'transaction_id': transactionId,
+        'status': status ?? 'submitting',
+        'service_id': serviceId,
+        'service_name': serviceName,
+        'target_phone': targetPhone,
+        'amount': amount,
+        'updated_at': DateTime.now().toIso8601String(),
+      }));
+    } catch (_) {
+      // The server transaction remains authoritative if local recovery storage fails.
+    }
+  }
+
+  Future<void> _clearActivePayment(AppController app) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_paymentStorageKey(app));
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> _buildServerPaymentPayload({
+    required AppController app,
+    required int serviceId,
+    required String targetPhone,
+    required double amount,
+    required String itemName,
+    required int? itemId,
+    required String? itemType,
+    required String? itemCode,
+  }) async {
+    final loaded = await app.loadServiceContract(serviceId, force: true);
+    final contract = loaded ?? app.serviceDetailsCache[serviceId];
+    if (contract == null) {
+      throw Exception('تعذر تحميل تعريف الخدمة من الخادم. أعد مزامنة خدمات الاتصالات ثم حاول مرة أخرى.');
+    }
+    final rawFields = contract['fields'];
+    if (rawFields is! List || rawFields.isEmpty) {
+      throw Exception('لم يُرجع الخادم حقول الطلب لهذه الخدمة؛ أوقفنا الإرسال لتجنب عملية غير مكتملة.');
+    }
+
+    final payload = <String, dynamic>{};
+    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    for (final rawField in rawFields.whereType<Map>()) {
+      final field = Map<String, dynamic>.from(rawField);
+      final key = '${field['key'] ?? ''}'.trim();
+      if (key.isEmpty) continue;
+      final normalizedKey = key.toLowerCase();
+      final required = field['required'] == true;
+      final defaultValue = field['default'];
+      dynamic value;
+
+      if (const {
+        'mobile', 'phone', 'msisdn', 'mobile_number', 'phone_number',
+        'subscriber_number', 'account_number', 'line_number', 'recipient_number',
+        'target_phone', 'number',
+      }.contains(normalizedKey)) {
+        value = targetPhone;
+      } else if (const {'amount', 'value', 'payment_amount'}.contains(normalizedKey)) {
+        if (itemId == null || pricingMode != 'item') value = amount;
+      } else if (normalizedKey == 'type' && currentOpId == 'yemen_net') {
+        value = netTab == 'phone' ? 'phone' : 'adsl';
+      } else if (const {'operator', 'network', 'carrier', 'service_operator'}.contains(normalizedKey)) {
+        final choices = field['choices'];
+        final allowed = <String>{};
+        if (choices is List) {
+          for (final choice in choices) {
+            if (choice is Map) {
+              allowed.add('${choice['value'] ?? choice['key'] ?? choice['id'] ?? ''}');
+            } else if (choice != null) {
+              allowed.add('$choice');
+            }
+          }
+        }
+        if (allowed.isEmpty || allowed.contains(currentOpId)) {
+          value = currentOpId;
+        } else if (allowed.contains(currentOp.name)) {
+          value = currentOp.name;
+        }
+      } else if (const {'package', 'package_name', 'plan', 'plan_name'}.contains(normalizedKey)) {
+        if (itemId == null) value = itemName;
+      } else if (const {'code', 'package_code', 'provider_offer_code', 'external_code'}.contains(normalizedKey)) {
+        if (itemId == null && itemCode != null && itemCode.isNotEmpty) value = itemCode;
+      } else if (defaultValue != null && '$defaultValue'.trim().isNotEmpty) {
+        value = defaultValue;
+      }
+
+      if (value != null && '$value'.trim().isNotEmpty) {
+        payload[key] = value;
+      } else if (required &&
+          !(itemId != null &&
+            const {'amount', 'external_code', 'num', 'packageid', 'uniqcode'}.contains(normalizedKey))) {
+        final label = '${field['label'] ?? key}';
+        throw Exception('يتطلب الخادم الحقل «$label»، ولا يمكن تعبئته بأمان من الشاشة الحالية.');
+      }
+    }
+    return payload;
+  }
+
+  Future<void> _showPendingPaymentDialog({
+    required Map<String, dynamic> transaction,
+    required String itemName,
+    required String targetPhone,
+    required double amount,
+    bool unknownReference = false,
+  }) async {
+    final transactionId = '${transaction['id'] ?? transaction['transaction_id'] ?? ''}'.trim();
+    final message = unknownReference || transactionId.isEmpty
+        ? 'لم يصل تأكيد نهائي أو رقم مرجع من الخادم. قد يكون الطلب قد استُلم بالفعل. لا تعاود السداد الآن؛ افتح سجل العمليات وافحص الخادم أولًا.'
+        : 'استلم الخادم طلب «$itemName» للرقم $targetPhone بمبلغ ${amount.toStringAsFixed(2)} ر.ي، لكنه لم يُرجع نتيجة نهائية بعد. لا تكرر السداد؛ استخدم المرجع لفحص الحالة من سجل العمليات.';
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        backgroundColor: Colors.white,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: const BoxDecoration(color: Color(0xFFFFF7E6), shape: BoxShape.circle),
+                child: const Icon(Icons.hourglass_top_rounded, color: Color(0xFFB45309), size: 32),
+              ),
+              const SizedBox(height: 10),
+              const Text('تم إرسال العملية وجاري انتظار الرد', textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFFB45309))),
+              const SizedBox(height: 8),
+              Text(message, textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11.5, height: 1.6, color: Color(0xFF334155))),
+              if (transactionId.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: SelectableText(
+                    'مرجع العملية: $transactionId',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: FilledButton.styleFrom(backgroundColor: AppColors.burgundy, minimumSize: const Size(double.infinity, 42)),
+                  child: const Text('حسنًا، سأفحص سجل العمليات'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Preserve the original payment panel and confirmation UI. Only request
+  // validation, server polling, and transaction outcome handling are changed.
   void _executePaymentWithWaitingDialog({
     required String itemName,
     required double amount,
@@ -2038,10 +2254,29 @@ class _PaymentScreenState extends State<PaymentScreen> {
     String? itemType,
     String? itemCode,
   }) async {
-    final app = context.read<AppController>();
+    if (_paymentInProgress) {
+      _showInquiryNotice('يوجد طلب سداد قيد المعالجة. انتظر نتيجته قبل إرسال طلب آخر.', isError: true);
+      return;
+    }
+    if (targetPhone.trim().isEmpty || amount <= 0 || resolvedServiceId <= 0) {
+      _showInquiryNotice('بيانات السداد غير مكتملة. تحقق من الرقم والمبلغ والخدمة.', isError: true);
+      return;
+    }
 
-    // Show custom Waiting Dialog with 8 multi-color rotating dots
-    showDialog(
+    final app = context.read<AppController>();
+    final fingerprint = _paymentFingerprint(
+      app: app,
+      serviceId: resolvedServiceId,
+      targetPhone: targetPhone,
+      amount: amount,
+      itemId: itemId,
+      itemType: itemType,
+    );
+    var idempotencyKey = '';
+    var requestSent = false;
+    _paymentInProgress = true;
+
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => Dialog(
@@ -2055,17 +2290,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
             children: [
               MultiColorDotsSpinner(size: 52),
               SizedBox(height: 18),
-              Text(
-                'الرجاء الإنتظار قليلاً....',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: Color(0xFF1E293B)),
-              ),
+              Text('الرجاء الانتظار قليلًا...', textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: Color(0xFF1E293B))),
               SizedBox(height: 4),
-              Text(
-                'جاري إرسال طلب السداد إلى الخادم',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.bold),
-              ),
+              Text('جاري إرسال طلب السداد والتحقق من نتيجته لدى الخادم (حتى 40 ثانية)',
+                  textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
             ],
           ),
         ),
@@ -2073,70 +2302,185 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
 
     try {
+      final active = await _readActivePayment(app);
+      if (active != null) {
+        final activeId = '${active['transaction_id'] ?? ''}'.trim();
+        final previousFingerprint = '${active['fingerprint'] ?? ''}';
+        final previousKey = '${active['idempotency_key'] ?? ''}'.trim();
+        if (activeId.isNotEmpty) {
+          Map<String, dynamic>? existingTx;
+          try {
+            existingTx = await app.api.serviceTransaction(activeId);
+          } catch (_) {}
+          if (existingTx != null && _isTransactionPending(existingTx)) {
+            existingTx = await app.api.waitForServiceTransaction(
+              activeId,
+              initial: existingTx,
+              maxWait: const Duration(seconds: 30),
+              pollInterval: const Duration(seconds: 2),
+            );
+          }
+          if (existingTx != null && _isTransactionSuccess(existingTx)) {
+            await _clearActivePayment(app);
+            if (!mounted) return;
+            Navigator.of(context, rootNavigator: true).pop();
+            try { await app.refreshWalletAndReports(); } catch (_) {}
+            _showSuccessDialog(
+              res: existingTx,
+              itemName: '${active['service_name'] ?? itemName}',
+              targetPhone: targetPhone,
+              amount: double.tryParse('${existingTx['amount'] ?? active['amount'] ?? amount}') ?? amount,
+              serviceId: resolvedServiceId,
+              serviceName: resolvedServiceName,
+            );
+            return;
+          }
+          if (existingTx != null && !_isTransactionPending(existingTx)) {
+            await _clearActivePayment(app);
+          } else {
+            if (!mounted) return;
+            Navigator.of(context, rootNavigator: true).pop();
+            await _showPendingPaymentDialog(
+              transaction: existingTx ?? active,
+              itemName: itemName,
+              targetPhone: targetPhone,
+              amount: amount,
+              unknownReference: existingTx == null,
+            );
+            return;
+          }
+        } else if (previousFingerprint != fingerprint) {
+          Navigator.of(context, rootNavigator: true).pop();
+          await _showPendingPaymentDialog(
+            transaction: active,
+            itemName: itemName,
+            targetPhone: targetPhone,
+            amount: amount,
+            unknownReference: true,
+          );
+          return;
+        } else {
+          idempotencyKey = previousKey;
+        }
+      }
+
+      if (idempotencyKey.isEmpty) {
+        idempotencyKey = 'shopik-pay-${app.user?.id ?? 0}-${DateTime.now().microsecondsSinceEpoch}-$fingerprint';
+      }
+      await _saveActivePayment(
+        app,
+        fingerprint: fingerprint,
+        idempotencyKey: idempotencyKey,
+        serviceId: resolvedServiceId,
+        serviceName: resolvedServiceName,
+        targetPhone: targetPhone,
+        amount: amount,
+      );
+
+      final payload = await _buildServerPaymentPayload(
+        app: app,
+        serviceId: resolvedServiceId,
+        targetPhone: targetPhone,
+        amount: amount,
+        itemName: itemName,
+        itemId: itemId,
+        itemType: itemType,
+        itemCode: itemCode,
+      );
+      requestSent = true;
       final res = await app.api.submitAndPollServiceRequest(
         serviceId: resolvedServiceId,
         itemType: itemType,
         itemId: itemId,
-        payload: {
-          'mobile': targetPhone,
-          'amount': amount,
-          'package': itemName,
-          'operator': currentOpId,
-          if (itemId != null) 'item_id': itemId,
-          if (itemCode != null && itemCode.isNotEmpty) ...{
-            'code': itemCode,
-            'package_code': itemCode,
-            'provider_offer_code': itemCode,
-          },
-        },
+        idempotencyKey: idempotencyKey,
+        payload: payload,
+        maxWait: const Duration(seconds: 40),
+        pollInterval: const Duration(seconds: 2),
       );
 
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Close waiting dialog
+      Navigator.of(context, rootNavigator: true).pop();
+      final status = _transactionStatus(res);
+      final transactionId = '${res['id'] ?? ''}'.trim();
+      await _saveActivePayment(
+        app,
+        fingerprint: fingerprint,
+        idempotencyKey: idempotencyKey,
+        transactionId: transactionId.isEmpty ? null : transactionId,
+        status: status,
+        serviceId: resolvedServiceId,
+        serviceName: resolvedServiceName,
+        targetPhone: targetPhone,
+        amount: amount,
+      );
+      try { await app.refreshWalletAndReports(); } catch (_) {}
 
-      await app.refreshWalletAndReports();
-
-      final status = '${res['status'] ?? 'success'}'.toLowerCase();
-      final isSuccess = status == 'success' || status == 'completed' || status == 'executed';
-
-      if (isSuccess) {
+      if (_isTransactionSuccess(res) && transactionId.isNotEmpty) {
+        await _clearActivePayment(app);
         _showSuccessDialog(
           res: res,
           itemName: itemName,
           targetPhone: targetPhone,
-          amount: amount,
+          amount: double.tryParse('${res['amount'] ?? ''}') ?? amount,
           serviceId: resolvedServiceId,
           serviceName: resolvedServiceName,
         );
+      } else if (const {'failed', 'error', 'rejected', 'refunded'}.contains(status)) {
+        await _clearActivePayment(app);
+        final reason = _transactionMessage(res).isNotEmpty
+            ? _transactionMessage(res)
+            : (status == 'refunded' ? 'أعاد الخادم حالة استرداد الرصيد.' : 'أعاد الخادم حالة فشل للعملية.');
+        _showFailureDialog(errorReason: reason);
       } else {
-        _showFailureDialog(
-          errorReason: '${res['message'] ?? res['detail'] ?? res['error'] ?? 'فشلت العملية لدى المزود'}',
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Close waiting dialog
-
-      // Try local deduction fallback
-      final success = await app.deductBalance(amount, '$itemName لرقم $targetPhone');
-      if (success) {
-        _showSuccessDialog(
-          res: {
-            'status': 'success',
-            'message': 'تم قيد عملية السداد بنجاح وخصم المبلغ من رصيد المحفظة.',
-            'id': 'SHK-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}',
-          },
+        await _showPendingPaymentDialog(
+          transaction: res,
           itemName: itemName,
           targetPhone: targetPhone,
           amount: amount,
-          serviceId: resolvedServiceId,
-          serviceName: resolvedServiceName,
-        );
-      } else {
-        _showFailureDialog(
-          errorReason: e.toString().replaceFirst('Exception: ', ''),
+          unknownReference: transactionId.isEmpty,
         );
       }
+    } catch (error) {
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      final apiRejected = error is ApiException &&
+          const {400, 401, 403, 404, 405, 422}.contains(error.statusCode);
+      if (apiRejected || !requestSent) {
+        await _clearActivePayment(app);
+        if (mounted) {
+          _showFailureDialog(
+            errorReason: 'رفض الخادم الطلب أو لم تكتمل بياناته: ${error.toString().replaceFirst('Exception: ', '')}',
+          );
+        }
+      } else {
+        // A timeout/5xx can happen after the backend has accepted the POST.
+        // Keep the idempotency key and block duplicate payment until reconciled.
+        final active = await _readActivePayment(app);
+        final storedKey = '${active?['idempotency_key'] ?? idempotencyKey}';
+        await _saveActivePayment(
+          app,
+          fingerprint: fingerprint,
+          idempotencyKey: storedKey,
+          transactionId: active?['transaction_id']?.toString(),
+          status: 'unknown',
+          serviceId: resolvedServiceId,
+          serviceName: resolvedServiceName,
+          targetPhone: targetPhone,
+          amount: amount,
+        );
+        if (mounted) {
+          await _showPendingPaymentDialog(
+            transaction: active ?? <String, dynamic>{},
+            itemName: itemName,
+            targetPhone: targetPhone,
+            amount: amount,
+            unknownReference: true,
+          );
+        }
+      }
+    } finally {
+      _paymentInProgress = false;
     }
   }
 
