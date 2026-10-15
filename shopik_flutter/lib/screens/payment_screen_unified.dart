@@ -487,11 +487,41 @@ class _ServiceFormState extends State<_ServiceForm> {
     }
   }
 
-  Future<void> _clearPersistedTransaction(String? key) async {
+  Future<void> _clearPersistedTransaction(
+    String? key, {
+    bool clearIdempotencyKey = true,
+  }) async {
     if (key == null || key.isEmpty) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(key);
+      await prefs.remove('${key}_ambiguous');
+      if (clearIdempotencyKey) {
+        await prefs.remove('${key}_idempotency');
+      }
+    } catch (_) {}
+  }
+
+  Future<String> _idempotencyKeyFor(String requestKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    final storageKey = '${requestKey}_idempotency';
+    final existing = prefs.getString(storageKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    // One unique key per attempted checkout. It is reused only while this exact
+    // attempt is unresolved, allowing the backend to return its existing UUID
+    // after a network timeout instead of making a duplicate transaction.
+    final userId = widget.app.user?.id ?? 0;
+    final fingerprint = requestKey.split('_').last;
+    final created = 'pay-$userId-${DateTime.now().microsecondsSinceEpoch}-$fingerprint';
+    await prefs.setString(storageKey, created);
+    return created;
+  }
+
+  Future<void> _clearAmbiguousMarker(String? key) async {
+    if (key == null || key.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
       await prefs.remove('${key}_ambiguous');
     } catch (_) {}
   }
@@ -530,7 +560,7 @@ class _ServiceFormState extends State<_ServiceForm> {
       ),
     );
     if (accepted != true || !mounted) return;
-    await _clearPersistedTransaction(_pendingKey);
+    await _clearPersistedTransaction(_pendingKey, clearIdempotencyKey: false);
     setState(() => _blockedAfterAmbiguousSubmit = false);
   }
 
@@ -559,11 +589,6 @@ class _ServiceFormState extends State<_ServiceForm> {
     _pendingKey = requestKey;
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
-    final ambiguous = preferences.getBool('${requestKey}_ambiguous') ?? false;
-    if (ambiguous) {
-      setState(() => _blockedAfterAmbiguousSubmit = true);
-      return;
-    }
     final storedTransaction = preferences.getString(requestKey);
     if (storedTransaction != null && storedTransaction.isNotEmpty) {
       try {
@@ -579,6 +604,11 @@ class _ServiceFormState extends State<_ServiceForm> {
       } catch (_) {
         await preferences.remove(requestKey);
       }
+    }
+    final ambiguous = preferences.getBool('${requestKey}_ambiguous') ?? false;
+    if (ambiguous) {
+      setState(() => _blockedAfterAmbiguousSubmit = true);
+      return;
     }
 
     final selectedName = '${_item?['name'] ?? ''}';
@@ -598,6 +628,9 @@ class _ServiceFormState extends State<_ServiceForm> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    final idempotencyKey = await _idempotencyKeyFor(requestKey);
+    await _markAmbiguousRequest(requestKey);
+    if (!mounted) return;
     setState(() {
       _busy = true;
       _elapsed = 0;
@@ -612,6 +645,7 @@ class _ServiceFormState extends State<_ServiceForm> {
         payload: payload,
         itemType: _item == null ? null : '${_item!['type'] ?? ''}',
         itemId: _item == null ? null : int.tryParse('${_item!['id'] ?? ''}'),
+        idempotencyKey: idempotencyKey,
         maxWait: const Duration(seconds: 40),
         onProgress: (tx) {
           if (!mounted) return;
@@ -633,6 +667,8 @@ class _ServiceFormState extends State<_ServiceForm> {
         await _unknownReference();
         return;
       }
+      await _persistPendingTransaction(requestKey, transaction);
+      await _clearAmbiguousMarker(requestKey);
       final checked = await showDialog<Map<String, dynamic>>(
         context: context,
         barrierDismissible: false,
