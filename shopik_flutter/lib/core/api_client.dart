@@ -94,7 +94,7 @@ class ApiClient {
 
   static const Set<String> _terminalServiceStatuses = {
     'success', 'completed', 'done', 'executed',
-    'failed', 'error', 'rejected', 'refunded', 'manual_review',
+    'failed', 'error', 'rejected', 'refunded',
   };
 
   String _normalizedServiceStatus(dynamic raw) => '${raw ?? ''}'.trim().toLowerCase();
