@@ -517,7 +517,7 @@ class _ServiceFormState extends State<_ServiceForm> {
     const safeKeys = {
       'id', 'service', 'service_kind', 'status', 'amount', 'currency',
       'provider_transid', 'provider_transaction_id', 'error_code',
-      'error_message', 'result', 'created_at', 'completed_at',
+      'error_message', 'created_at', 'completed_at',
     };
     return <String, dynamic>{
       for (final entry in tx.entries)
