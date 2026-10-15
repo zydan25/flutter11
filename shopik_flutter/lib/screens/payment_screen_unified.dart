@@ -696,7 +696,7 @@ class _ServiceFormState extends State<_ServiceForm> {
       _timer?.cancel();
       if (!mounted) return;
       setState(() => _busy = false);
-      final reject = e is ApiException && e.statusCode >= 400 && e.statusCode < 500;
+      final reject = e is ApiException && const {400, 401, 403, 404, 405, 422}.contains(e.statusCode);
       if (!reject) {
         // The service POST may have reached the backend even if the response timed out.
         // Persist an ambiguity marker because no transaction UUID was returned.
