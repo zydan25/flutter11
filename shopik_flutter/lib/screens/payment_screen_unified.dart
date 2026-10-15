@@ -492,7 +492,46 @@ class _ServiceFormState extends State<_ServiceForm> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(key);
+      await prefs.remove('${key}_ambiguous');
     } catch (_) {}
+  }
+
+  Future<void> _markAmbiguousRequest(String? key) async {
+    if (key == null || key.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('${key}_ambiguous', true);
+    } catch (_) {}
+  }
+
+  Future<void> _allowRetryAfterManualCheck() async {
+    if (_busy || !_blockedAfterAmbiguousSubmit) return;
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.warning_amber_rounded, color: Color(0xFFB45309)),
+          SizedBox(width: 8),
+          Expanded(child: Text('إعادة المحاولة بعد التحقق')),
+        ]),
+        content: const Text(
+          'قد يكون الخادم قد استلم الطلب السابق، لكن التطبيق لم يحصل على رقم مرجع قابل للفحص. راجع سجل العمليات لدى الخادم وتأكد من عدم وجود عملية منفذة قبل المتابعة. إعادة المحاولة قد تؤدي إلى تكرار السداد.',
+          style: TextStyle(fontSize: 12, height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB45309)),
+            child: const Text('تحققت وأريد المتابعة'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    await _clearPersistedTransaction(_pendingKey);
+    setState(() => _blockedAfterAmbiguousSubmit = false);
   }
 
   Future<void> _submit() async {
@@ -520,6 +559,11 @@ class _ServiceFormState extends State<_ServiceForm> {
     _pendingKey = requestKey;
     final preferences = await SharedPreferences.getInstance();
     if (!mounted) return;
+    final ambiguous = preferences.getBool('${requestKey}_ambiguous') ?? false;
+    if (ambiguous) {
+      setState(() => _blockedAfterAmbiguousSubmit = true);
+      return;
+    }
     final storedTransaction = preferences.getString(requestKey);
     if (storedTransaction != null && storedTransaction.isNotEmpty) {
       try {
@@ -584,6 +628,7 @@ class _ServiceFormState extends State<_ServiceForm> {
       if (!mounted) return;
       setState(() => _busy = false);
       if ('${transaction['id'] ?? ''}'.trim().isEmpty) {
+        await _markAmbiguousRequest(requestKey);
         if (mounted) setState(() => _blockedAfterAmbiguousSubmit = true);
         await _unknownReference();
         return;
@@ -616,10 +661,11 @@ class _ServiceFormState extends State<_ServiceForm> {
       if (!mounted) return;
       setState(() => _busy = false);
       final reject = e is ApiException && e.statusCode >= 400 && e.statusCode < 500;
-      if (!reject && mounted) {
-        // A network/5xx error may happen after the server accepted the request.
-        // Block repeat submissions because we do not have a transaction UUID.
-        setState(() => _blockedAfterAmbiguousSubmit = true);
+      if (!reject) {
+        // The service POST may have reached the backend even if the response timed out.
+        // Persist an ambiguity marker because no transaction UUID was returned.
+        await _markAmbiguousRequest(requestKey);
+        if (mounted) setState(() => _blockedAfterAmbiguousSubmit = true);
       }
       await showDialog<void>(
         context: context,
@@ -774,9 +820,30 @@ class _ServiceFormState extends State<_ServiceForm> {
                       borderRadius: BorderRadius.circular(13),
                       border: Border.all(color: const Color(0xFFFECDD3)),
                     ),
-                    child: const Text(
-                      'لم يصل تأكيد أو مرجع يمكن فحصه بعد الإرسال. تم تعطيل إعادة الإرسال لتجنب تكرار الخصم. افتح سجل العمليات وتحقق من الخادم قبل إنشاء طلب جديد.',
-                      style: TextStyle(fontSize: 10.5, height: 1.5, color: Color(0xFF9F1239), fontWeight: FontWeight.w700),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(children: [
+                          Icon(Icons.warning_amber_rounded, color: AppColors.rose, size: 19),
+                          SizedBox(width: 7),
+                          Expanded(child: Text('يجب فحص الطلب السابق أولًا', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF9F1239)))),
+                        ]),
+                        const SizedBox(height: 5),
+                        const Text(
+                          'لم يصل تأكيد أو مرجع يمكن فحصه بعد الإرسال. قد يكون الخادم استلم الطلب بالفعل؛ لذلك عُطلت إعادة الإرسال لتقليل احتمال تكرار الخصم. افحص سجل العمليات لدى الخادم.',
+                          style: TextStyle(fontSize: 10.5, height: 1.5, color: Color(0xFF9F1239), fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _allowRetryAfterManualCheck,
+                            icon: const Icon(Icons.fact_check_outlined, size: 17),
+                            label: const Text('تحققت من السجل وأريد المتابعة'),
+                            style: TextButton.styleFrom(foregroundColor: const Color(0xFF9F1239)),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -857,7 +924,7 @@ class _ServiceFormState extends State<_ServiceForm> {
     final key = '${field['key'] ?? ''}'.trim();
     final type = '${field['type'] ?? 'text'}'.toLowerCase();
     final options = _options(field);
-    if (options.isNotEmpty || ['select','dropdown','choice','enum'].contains(type)) {
+    if (options.isNotEmpty) {
       return DropdownButtonFormField<String>(
         value: _choices[key],
         isExpanded: true,
