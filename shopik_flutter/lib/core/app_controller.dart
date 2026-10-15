@@ -569,13 +569,25 @@ class AppController extends ChangeNotifier {
     return catalogServices.where((s) { final haystack = '${s['code'] ?? ''} ${s['name'] ?? ''} ${s['description'] ?? ''}'.toLowerCase(); return needles.any((k) => haystack.contains(k.toLowerCase())); }).toList();
   }
 
-  Future<Map<String, dynamic>> requestService({required int serviceId, required Map<String, dynamic> payload, String? itemType, int? itemId, String? idempotencyKey}) async {
-    final tx = await api.serviceRequest(serviceId: serviceId, payload: payload, itemType: itemType, itemId: itemId, idempotencyKey: idempotencyKey);
-    var latest = tx; final id = tx['id']?.toString();
-    if (id != null && ['accepted', 'queued', 'pending', 'pending_provider', 'processing'].contains('${tx['status']}')) {
-      for (var i = 0; i < 20; i++) { await Future.delayed(const Duration(milliseconds: 1200)); latest = await api.serviceTransaction(id); if (['success', 'failed', 'refunded', 'manual_review'].contains('${latest['status']}')) break; }
-    }
-    return latest;
+  Future<Map<String, dynamic>> requestService({
+    required int serviceId,
+    required Map<String, dynamic> payload,
+    String? itemType,
+    int? itemId,
+    String? idempotencyKey,
+    Duration maxWait = const Duration(seconds: 40),
+    void Function(Map<String, dynamic>)? onProgress,
+  }) {
+    return api.submitAndPollServiceRequest(
+      serviceId: serviceId,
+      payload: payload,
+      itemType: itemType,
+      itemId: itemId,
+      idempotencyKey: idempotencyKey,
+      maxWait: maxWait,
+      pollInterval: const Duration(seconds: 2),
+      onProgress: onProgress,
+    );
   }
   Future<Map<String, dynamic>> recipientLookup(String phone) => api.giftLookup(phone);
   @override void dispose() { _poller?.cancel(); super.dispose(); }
