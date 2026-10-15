@@ -411,21 +411,6 @@ class _ServiceFormState extends State<_ServiceForm> {
     return item['is_active'] != false;
   }
 
-  List<MapEntry<String, String>> _options(Map<String, dynamic> f) {
-    final raw = f['choices'];
-    if (raw is List) {
-      return raw.map((o) {
-        if (o is Map) {
-          final value = '${o['value'] ?? o['key'] ?? o['id'] ?? ''}';
-          return MapEntry(value, '${o['label'] ?? o['name'] ?? value}');
-        }
-        return MapEntry('$o', '$o');
-      }).where((o) => o.key.isNotEmpty).toList();
-    }
-    if (raw is Map) return raw.entries.map((e) => MapEntry('${e.key}', '${e.value}')).toList();
-    return [];
-  }
-
   String? _validate(Map<String, dynamic> f, String? raw) {
     final value = raw?.trim() ?? '';
     if (f['required'] == true && value.isEmpty) return 'هذا الحقل مطلوب';
