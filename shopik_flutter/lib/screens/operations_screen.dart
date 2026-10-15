@@ -761,8 +761,7 @@ class OperationDetailScreen extends StatelessWidget {
     final completedAt = '${operation['completed_at'] ?? 'لم تكتمل بعد'}';
     final readiness = '${operation['status'] ?? 'unknown'}'.trim();
     final normalizedStatus = readiness.toLowerCase();
-    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(normalizedStatus) ||
-        readiness.contains('جاهز');
+    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(normalizedStatus);
     final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(normalizedStatus);
     final isReview = normalizedStatus == 'manual_review';
     final readinessLabel = isReady
