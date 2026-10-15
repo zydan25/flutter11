@@ -2141,11 +2141,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
       throw Exception('تعذر تحميل تعريف الخدمة من الخادم. أعد مزامنة خدمات الاتصالات ثم حاول مرة أخرى.');
     }
     final rawFields = contract['fields'];
-    if (rawFields is! List || rawFields.isEmpty) {
+    final hasCatalogItem = itemId != null && itemId > 0 && itemType != null && itemType.isNotEmpty;
+    if ((rawFields is! List || rawFields.isEmpty) && !hasCatalogItem) {
       throw Exception('لم يُرجع الخادم حقول الطلب لهذه الخدمة؛ أوقفنا الإرسال لتجنب عملية غير مكتملة.');
     }
 
     final payload = <String, dynamic>{};
+    if (rawFields is! List || rawFields.isEmpty) {
+      // For catalog pricing, the backend hydrates provider codes and prices
+      // from the trusted item_id/item_type. An empty client payload is valid
+      // only in that case.
+      return payload;
+    }
     final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
     for (final rawField in rawFields.whereType<Map>()) {
       final field = Map<String, dynamic>.from(rawField);
