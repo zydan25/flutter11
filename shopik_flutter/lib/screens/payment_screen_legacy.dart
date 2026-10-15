@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
 import 'screen_common.dart';
@@ -129,6 +131,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   static const _nativeChannel = MethodChannel('com.shopik.app/heads_up_notifications');
   bool _isSyncing = false;
+  bool _paymentInProgress = false;
   Timer? _offersInquiryDebounce;
   String? _lastOffersInquiryPhone;
 
