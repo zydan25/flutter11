@@ -58,12 +58,14 @@ class _DenominationItem {
   final int tier;
   final double price;
   final String days;
+  final String itemType;
   const _DenominationItem({
     this.id,
     this.name,
     required this.tier,
     required this.price,
     required this.days,
+    this.itemType = '',
   });
 }
 
@@ -229,7 +231,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
     AppController? appInstance,
   }) {
     final app = appInstance ?? context.read<AppController>();
-    if (actionType == 'packages') {
+    if (actionType == 'fourg_pay' && currentOpId == 'yemen4g') {
+      final id = app.getServiceId('yemen4g_packages_pay', fallbacks: ['yemen4g_packages_list'], defaultId: 20)!;
+      final name = app.getServiceName('yemen4g_packages_pay', fallbacks: ['yemen4g_packages_list'], serviceId: id, defaultName: 'يمن فورجي - سداد باقة');
+      return (id: id, name: name);
+    } else if (actionType == 'packages') {
       if (currentOpId == 'yemen_mobile') {
         final id = app.getServiceId('bagatmobileget', fallbacks: ['yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_query', 'yemen_mobile_packages_legacy'], defaultId: 4)!;
         final name = app.getServiceName('bagatmobileget', fallbacks: ['yemen_mobile_packages_list'], serviceId: id, defaultName: 'Yemen Mobile - تفعيل باقة');
@@ -300,8 +306,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final name = app.getServiceName('yemen4g_package_change', serviceId: id, defaultName: 'يمن فورجي - تغيير باقة');
       return (id: id, name: name);
     } else if (actionType == 'net_adsl') {
-      final id = app.getServiceId('yemen_net_packages_list', fallbacks: ['yemen_net_package_pay', 'post-adsl'], defaultId: 23)!;
-      final name = app.getServiceName('yemen_net_packages_list', serviceId: id, defaultName: 'يمن نت - ADSL');
+      final id = app.getServiceId('yemen_net_package_pay', fallbacks: ['yemen_net_packages_list', 'post-adsl'], defaultId: 24)!;
+      final name = app.getServiceName('yemen_net_package_pay', fallbacks: ['yemen_net_packages_list', 'post-adsl'], serviceId: id, defaultName: 'يمن نت - سداد ADSL');
       return (id: id, name: name);
     } else if (actionType == 'net_line') {
       final id = app.getServiceId('yemen_net_landline_pay', fallbacks: ['fixed_phone_service', 'post-line'], defaultId: 24)!;
@@ -1440,6 +1446,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () {
+                    final catalogItemType = '${pkg.rawItem?['type'] ?? ''}'.trim();
+                    if (pkg.rawItem == null || pkg.id <= 0 || catalogItemType.isEmpty) {
+                      Navigator.pop(ctx);
+                      _showInquiryNotice('هذه الباقة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات قبل السداد.', isError: true);
+                      return;
+                    }
                     Navigator.pop(ctx);
                     _openConfirmPaymentDialog(
                       itemName: pkg.name + (includeLoan ? ' + سداد السلفة' : ''),
@@ -1448,7 +1460,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       serviceName: resolvedService.name,
                       itemId: pkg.id,
                       itemCode: pkg.code,
-                      itemType: 'telecom_plans',
+                      itemType: catalogItemType,
                     );
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
@@ -3595,6 +3607,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           tier: tier > 0 ? tier : price.toInt(),
           price: price > 0 ? price : tier.toDouble(),
           days: '${it['validity_days'] ?? it['days'] ?? 'صلاحية الفئة'}',
+          itemType: '${it['type'] ?? ''}',
         ));
       }
       if (dynList.isNotEmpty) {
@@ -3673,14 +3686,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
           itemBuilder: (_, i) {
             final d = list[i];
             return InkWell(
-              onTap: () => _openConfirmPaymentDialog(
-                itemName: d.name != null && d.name!.isNotEmpty ? d.name! : 'فئة ${d.tier}',
-                amount: d.price,
-                serviceId: resolvedInstant.id,
-                serviceName: resolvedInstant.name,
-                itemId: d.id,
-                itemType: 'denominations',
-              ),
+              onTap: () {
+                if (d.id == null || d.itemType.isEmpty) {
+                  _showInquiryNotice('هذه الفئة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات ثم أعد المحاولة.', isError: true);
+                  return;
+                }
+                _openConfirmPaymentDialog(
+                  itemName: d.name != null && d.name!.isNotEmpty ? d.name! : 'فئة ${d.tier}',
+                  amount: d.price,
+                  serviceId: resolvedInstant.id,
+                  serviceName: resolvedInstant.name,
+                  itemId: d.id,
+                  itemType: d.itemType,
+                );
+              },
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: cardBorder)),
@@ -3735,7 +3754,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 children: fourGDenominations.map((item) {
                   return InkWell(
                     onTap: () {
-                      final resolved4g = _resolveServiceForCurrentAction(actionType: 'packages');
+                      final resolved4g = _resolveServiceForCurrentAction(actionType: 'fourg_pay');
                       _openConfirmPaymentDialog(
                         itemName: item['label'],
                         amount: item['price'],
