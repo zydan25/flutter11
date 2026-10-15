@@ -856,7 +856,7 @@ String _statusOf(Map<String, dynamic> tx) => '${tx['status'] ?? ''}'.trim().toLo
 
 bool _isTerminal(String status) => const {
   'success', 'completed', 'done', 'executed',
-  'failed', 'error', 'rejected', 'refunded', 'manual_review',
+  'failed', 'error', 'rejected', 'refunded',
 }.contains(status);
 
 _StatusView _statusView(String status, Map<String, dynamic> tx) {
