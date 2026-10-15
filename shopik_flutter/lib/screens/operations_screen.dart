@@ -58,80 +58,105 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   Future<void> _checkOperation(Map<String, dynamic> op) async {
-    final opId = '${op['id'] ?? ''}'.trim();
-    showDialog(
+    final operationId = '${op['id'] ?? ''}'.trim();
+    if (operationId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFB45309),
+          content: Text('لا يوجد رقم مرجع للعملية يمكن فحصه من الخادم.'),
+        ),
+      );
+      return;
+    }
+
+    var progressDialogOpen = true;
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              CircularProgressIndicator(color: Color(0xFF8B1D3B)),
-              SizedBox(height: 12),
-              Text('جاري فحص حالة العملية من المزود...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ],
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 12),
+                Text('جاري فحص حالة العملية من الخادم...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
           ),
         ),
       ),
     );
 
+    void closeProgressDialog() {
+      if (!progressDialogOpen || !mounted) return;
+      progressDialogOpen = false;
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
     try {
       final app = context.read<AppController>();
-      if (opId.isNotEmpty) {
-        final result = await app.api.checkOperationStatus(opId);
-        if (mounted) Navigator.pop(context);
-        
-        setState(() {
-          op['status'] = 'جاهز';
-          op['notes'] = result['notes'] ?? result['message'] ?? 'تم تجهيز العملية من نظام المزود تزامن مباشر! الرد: تصحيح الجاهزية بعد التأكد';
-        });
+      var result = await app.api.checkOperationStatus(operationId);
+      var status = '${result['status'] ?? ''}'.trim().toLowerCase();
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF059669),
-              behavior: SnackBarBehavior.floating,
-              content: Row(
-                children: const [
-                  Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text('العملية جاهز: تم التأكد من تنفيذها بنجاح لدى المزود', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-      } else {
-        if (mounted) Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Color(0xFF059669),
-              content: Text('العملية جاهزة ومكتملة بالفعل'),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF059669),
-            content: Text('العملية جاهز: الرد تصحيح الجاهزية بعد الفحص المباشر'),
-          ),
+      // A provider check can report that the transaction is still processing.
+      // Continue checking the existing UUID; never submit a second payment.
+      if (status.isEmpty ||
+          const {'accepted', 'queued', 'pending', 'pending_provider', 'processing', 'manual_review'}.contains(status)) {
+        result = await app.api.waitForServiceTransaction(
+          operationId,
+          initial: result,
+          maxWait: const Duration(seconds: 30),
+          pollInterval: const Duration(seconds: 2),
         );
+        status = '${result['status'] ?? ''}'.trim().toLowerCase();
       }
+
+      closeProgressDialog();
+      if (!mounted) return;
+
+      final note = '${result['error_message'] ?? result['message'] ?? result['detail'] ?? ''}'.trim();
+      setState(() {
+        op['status'] = status.isEmpty ? 'unknown' : status;
+        if (note.isNotEmpty) op['notes'] = note;
+        op['last_checked_at'] = DateTime.now().toIso8601String();
+      });
+
+      final success = const {'success', 'completed', 'done', 'executed'}.contains(status);
+      final failure = const {'failed', 'error', 'rejected', 'refunded'}.contains(status);
+      final message = success
+          ? 'أكد الخادم نجاح العملية.'
+          : status == 'refunded'
+              ? 'أفاد الخادم أن الرصيد أُعيد.'
+              : const {'failed', 'error', 'rejected'}.contains(status)
+                  ? 'أفاد الخادم أن العملية لم تنجح.'
+                  : status == 'manual_review'
+                      ? 'العملية تحتاج إلى مراجعة تشغيلية. لا تكرر السداد.'
+                      : 'لم تصل نتيجة نهائية بعد؛ الحالة الحالية: ${status.isEmpty ? 'غير معروفة' : status}.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: success
+              ? const Color(0xFF059669)
+              : failure
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFFB45309),
+          behavior: SnackBarBehavior.floating,
+          content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+        ),
+      );
+    } catch (e) {
+      closeProgressDialog();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFB45309),
+          behavior: SnackBarBehavior.floating,
+          content: Text('تعذر التحقق من حالة العملية؛ لم نغيرها إلى ناجحة: $e'),
+        ),
+      );
     }
   }
 
