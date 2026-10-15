@@ -1123,7 +1123,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (mounted) {
         setState(() {
           operatorRestrictedToast = null;
-          if (type == 'balance') balanceInquiryBanner = null;
+          if (type == 'balance') {
+            balanceInquiryBanner = null;
+            if (currentOpId == 'yemen_mobile') {
+              ymPhoneBalance = '---';
+              ymPhoneType = '---';
+            }
+          }
+          if (type == 'offers') {
+            // Clear number-specific results while a new number is being queried;
+            // do not show a previous subscriber's offers as though they were current.
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'none';
+            ymLoanAmount = 0;
+          }
         });
       }
 
