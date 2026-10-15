@@ -2162,13 +2162,23 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
 
     final payload = <String, dynamic>{};
+    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    final requiresBalance = contract['requires_balance'] == true;
+    if (requiresBalance && pricingMode == 'item' && !hasCatalogItem) {
+      throw Exception('هذه الخدمة مسعّرة بحسب الباقة. اختر عنصرًا من كتالوج الخادم بدل استخدام فئة ثابتة قديمة.');
+    }
+    if (pricingMode == 'fixed') {
+      final serverPrice = num.tryParse('${contract['price'] ?? ''}');
+      if (serverPrice != null && (serverPrice - amount).abs() > 0.009) {
+        throw Exception('السعر المعروض ${amount.toStringAsFixed(2)} ر.ي لا يطابق السعر الثابت المسجل في الخادم (${serverPrice.toStringAsFixed(2)} ر.ي). لم نرسل الطلب لتجنب خصم مبلغ مختلف.');
+      }
+    }
     if (rawFields is! List || rawFields.isEmpty) {
       // For catalog pricing, the backend hydrates provider codes and prices
       // from the trusted item_id/item_type. An empty client payload is valid
       // only in that case.
       return payload;
     }
-    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
     for (final rawField in rawFields.whereType<Map>()) {
       final field = Map<String, dynamic>.from(rawField);
       final key = '${field['key'] ?? ''}'.trim();
