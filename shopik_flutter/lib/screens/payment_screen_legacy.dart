@@ -1083,8 +1083,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
   Future<void> _runInquiry(String type, {bool quiet = false}) async {
     final currentPhone = phone.text.trim();
     final normalizedPhone = currentPhone.replaceAll(RegExp(r'\D'), '');
-    if (currentPhone.isEmpty || normalizedPhone.length < 7) {
-      if (!quiet) _showInquiryNotice('أدخل رقم الهاتف أو الحساب كاملًا قبل الاستعلام.', isError: true);
+    if (currentPhone.isEmpty ||
+        normalizedPhone.length < 7 ||
+        (currentOpId == 'yemen_mobile' && normalizedPhone.length != 9)) {
+      if (!quiet) {
+        _showInquiryNotice(
+          currentOpId == 'yemen_mobile'
+              ? 'أدخل رقم يمن موبايل كاملًا (9 أرقام) قبل الاستعلام.'
+              : 'أدخل رقم الهاتف أو الحساب كاملًا قبل الاستعلام.',
+          isError: true,
+        );
+      }
       return;
     }
 
@@ -1446,6 +1455,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () {
+                    if (includeLoan) {
+                      Navigator.pop(ctx);
+                      _showInquiryNotice('إضافة سداد السلفة إلى الباقة غير معرفة كقيد مستقل في الخادم. أوقفناها لتجنب اختلاف المبلغ المخصوم عن المبلغ المعروض.', isError: true);
+                      return;
+                    }
                     final catalogItemType = '${pkg.rawItem?['type'] ?? ''}'.trim();
                     if (pkg.rawItem == null || pkg.id <= 0 || catalogItemType.isEmpty) {
                       Navigator.pop(ctx);
@@ -2507,7 +2521,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     String? serviceName,
   }) {
     final app = context.read<AppController>();
-    final ref = res['id'] ?? res['reference'] ?? res['transaction_id'] ?? 'SHK-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
+    final ref = res['id'] ?? res['reference'] ?? res['transaction_id'] ?? 'غير متوفر من الخادم';
 
     showDialog(
       context: context,
