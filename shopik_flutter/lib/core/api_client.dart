@@ -89,6 +89,9 @@ class ApiClient {
   Future<Map<String,dynamic>> serviceTransaction(String id) async =>
       Map<String,dynamic>.from(await get('/v2/services/requests/$id/'));
 
+  Future<Map<String,dynamic>> serviceProviderCheck(String id) async =>
+      Map<String,dynamic>.from(await post('/v2/services/requests/$id/provider-check/', {}));
+
   static const Set<String> _terminalServiceStatuses = {
     'success', 'completed', 'done', 'executed',
     'failed', 'error', 'rejected', 'refunded', 'manual_review',
