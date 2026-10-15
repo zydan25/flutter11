@@ -705,3 +705,246 @@ class _ServiceFormState extends State<_ServiceForm> {
     return [];
   }
 }
+
+
+class _TransactionResultDialog extends StatefulWidget {
+  const _TransactionResultDialog({required this.app, required this.transaction});
+  final AppController app;
+  final Map<String, dynamic> transaction;
+  @override
+  State<_TransactionResultDialog> createState() => _TransactionResultDialogState();
+}
+
+class _TransactionResultDialogState extends State<_TransactionResultDialog> {
+  late Map<String, dynamic> _tx;
+  bool _checking = false;
+  String get _id => '${_tx['id'] ?? ''}'.trim();
+  String get _status => _statusOf(_tx);
+
+  @override
+  void initState() {
+    super.initState();
+    _tx = Map<String, dynamic>.from(widget.transaction);
+  }
+
+  Future<void> _checkAgain() async {
+    if (_checking || _id.isEmpty) return;
+    setState(() => _checking = true);
+    try {
+      final result = await widget.app.api.checkOperationStatus(_id);
+      if (mounted) setState(() => _tx = result);
+      if (!_isTerminal(_statusOf(result))) {
+        final pendingResult = await widget.app.api.waitForServiceTransaction(
+          _id,
+          initial: result,
+          maxWait: const Duration(seconds: 30),
+          pollInterval: const Duration(seconds: 2),
+        );
+        if (mounted) setState(() => _tx = pendingResult);
+      }
+      try { await widget.app.refreshWalletAndReports(); } catch (_) {}
+    } catch (e) {
+      if (mounted) showAppToast(context, 'تعذر فحص الحالة الآن: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final view = _statusView(_status, _tx);
+    final error = '${_tx['error_message'] ?? _tx['detail'] ?? ''}'.trim();
+    final result = _tx['result'];
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(21)),
+      titlePadding: const EdgeInsets.fromLTRB(18, 19, 18, 5),
+      contentPadding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      title: Column(children: [
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(color: view.color.withOpacity(.11), shape: BoxShape.circle),
+          child: Icon(view.icon, size: 30, color: view.color),
+        ),
+        const SizedBox(height: 9),
+        Text(view.title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w900)),
+      ]),
+      content: SizedBox(
+        width: 370,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(view.message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11.5, height: 1.55)),
+              const SizedBox(height: 10),
+              _ResultRow('مرجع العملية', _id),
+              if ('${_tx['amount'] ?? ''}'.isNotEmpty)
+                _ResultRow('المبلغ من الخادم', '${_tx['amount']} ${_tx['currency'] ?? 'YER'}'),
+              if (error.isNotEmpty) _ResultRow('ملاحظة الخادم', error),
+              if (result is Map)
+                for (final entry in result.entries.where((e) {
+                  final key = '${e.key}'.toLowerCase();
+                  return e.value != null && e.value is! Map &&
+                      !key.contains('token') && !key.contains('secret') &&
+                      !key.contains('password') && !key.contains('authorization');
+                }).take(6))
+                  _ResultRow('${entry.key}', entry.value is List ? (entry.value as List).take(4).join('، ') : '${entry.value}'),
+              if (_checking) ...[
+                const SizedBox(height: 11),
+                const LinearProgressIndicator(color: AppColors.blue),
+                const SizedBox(height: 7),
+                const Text('يجري طلب آخر لفحص الحالة؛ لم يتم إنشاء عملية جديدة.', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: AppColors.muted)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (_id.isNotEmpty && (!_isTerminal(_status) || _status == 'manual_review'))
+          OutlinedButton.icon(
+            onPressed: _checking ? null : _checkAgain,
+            icon: const Icon(Icons.sync_rounded, size: 17),
+            label: Text(_checking ? 'جاري الفحص...' : 'فحص ومتابعة'),
+          ),
+        FilledButton(
+          onPressed: _checking ? null : () => Navigator.pop(context, _tx),
+          style: FilledButton.styleFrom(backgroundColor: AppColors.burgundy),
+          child: const Text('تم'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ResultRow extends StatelessWidget {
+  const _ResultRow(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    margin: const EdgeInsets.only(bottom: 5),
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8FAFC),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 9, color: AppColors.muted, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 2),
+        Text(value, style: const TextStyle(fontSize: 10.5, color: AppColors.dark, fontWeight: FontWeight.w800)),
+      ],
+    ),
+  );
+}
+
+class _StatusView {
+  const _StatusView(this.title, this.message, this.color, this.icon);
+  final String title;
+  final String message;
+  final Color color;
+  final IconData icon;
+}
+
+String _statusOf(Map<String, dynamic> tx) => '${tx['status'] ?? ''}'.trim().toLowerCase();
+
+bool _isTerminal(String status) => const {
+  'success', 'completed', 'done', 'executed',
+  'failed', 'error', 'rejected', 'refunded', 'manual_review',
+}.contains(status);
+
+_StatusView _statusView(String status, Map<String, dynamic> tx) {
+  switch (status) {
+    case 'success':
+    case 'completed':
+    case 'done':
+    case 'executed':
+      return const _StatusView(
+        'تم تأكيد نجاح العملية',
+        'وصلت حالة نجاح مؤكدة من الخادم. هذه هي النتيجة النهائية المعروضة.',
+        AppColors.emerald,
+        Icons.check_circle_rounded,
+      );
+    case 'failed':
+    case 'error':
+    case 'rejected':
+      return const _StatusView(
+        'لم تنجح العملية',
+        'أعاد الخادم حالة فشل. راجع السبب أدناه ولا تكرر العملية إذا كانت النتيجة غير واضحة.',
+        AppColors.rose,
+        Icons.cancel_rounded,
+      );
+    case 'refunded':
+      return const _StatusView(
+        'تم إرجاع الرصيد',
+        'أعاد الخادم حالة استرداد الرصيد. حدّث الرصيد وراجع سجل العملية قبل المحاولة مرة أخرى.',
+        Color(0xFFB45309),
+        Icons.account_balance_wallet_rounded,
+      );
+    case 'manual_review':
+      return const _StatusView(
+        'العملية تحتاج مراجعة',
+        'لم يصل تأكيد نهائي للنجاح. لا تكرر السداد قبل انتهاء المراجعة التشغيلية.',
+        Color(0xFFB45309),
+        Icons.support_agent_rounded,
+      );
+    case 'accepted':
+    case 'queued':
+    case 'processing':
+    case 'pending_provider':
+      return const _StatusView(
+        'تم إرسال العملية وجاري انتظار الرد',
+        'استلم الخادم الطلب لكنه لم يرجع نتيجة نهائية بعد. لا تعِد إرساله؛ احتفظ بالمرجع وافحص الحالة لاحقًا.',
+        AppColors.blue,
+        Icons.hourglass_top_rounded,
+      );
+    default:
+      final hasId = '${tx['id'] ?? ''}'.trim().isNotEmpty;
+      return _StatusView(
+        hasId ? 'النتيجة لم تُحسم بعد' : 'تعذر تحديد النتيجة',
+        hasId
+            ? 'يوجد مرجع للعملية، لكن الحالة لا تثبت نجاحها أو فشلها بعد.'
+            : 'لم يصل تأكيد كافٍ من الخادم لإثبات اكتمال العملية.',
+        const Color(0xFFB45309),
+        Icons.help_outline_rounded,
+      );
+  }
+}
+
+Color _serviceColor(String name) {
+  final value = name.toLowerCase();
+  if (value.contains('يمن موبايل') || value.contains('yem')) return AppColors.burgundy;
+  if (value.contains('سبأفون') || value.contains('saba')) return AppColors.blue;
+  if (value.contains('يو') || value.contains('you')) return AppColors.amber;
+  if (value.contains('واي') || value.contains('why')) return AppColors.rose;
+  if (value.contains('4g') || value.contains('فورجي')) return AppColors.sky;
+  if (value.contains('نت') || value.contains('adsl')) return AppColors.indigo;
+  if (value.contains('كهرب') || value.contains('ماء')) return AppColors.teal;
+  return AppColors.purple;
+}
+
+IconData _serviceIcon(String name, String kind) {
+  final value = '$name $kind'.toLowerCase();
+  if (value.contains('query') || value.contains('استعلام')) return Icons.manage_search_rounded;
+  if (value.contains('كهرب')) return Icons.electrical_services_rounded;
+  if (value.contains('ماء') || value.contains('water')) return Icons.water_drop_rounded;
+  if (value.contains('net') || value.contains('نت') || value.contains('wifi')) return Icons.wifi_rounded;
+  if (value.contains('4g') || value.contains('فورجي')) return Icons.router_rounded;
+  if (value.contains('باق') || value.contains('package')) return Icons.inventory_2_rounded;
+  if (value.contains('رصيد') || value.contains('balance')) return Icons.account_balance_wallet_rounded;
+  return Icons.phone_android_rounded;
+}
+
+IconData _fieldIcon(String key) {
+  final value = key.toLowerCase();
+  if (value.contains('mobile') || value.contains('phone')) return Icons.phone_android_rounded;
+  if (value.contains('amount') || value.contains('price')) return Icons.payments_outlined;
+  if (value.contains('player') || value.contains('account')) return Icons.person_outline_rounded;
+  return Icons.edit_outlined;
+}
