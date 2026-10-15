@@ -804,7 +804,10 @@ class _ServiceFormState extends State<_ServiceForm> {
       if (!mounted) return;
       setState(() => _busy = false);
       final reject = e is ApiException && const {400, 401, 403, 404, 405, 422}.contains(e.statusCode);
-      if (!reject) {
+      if (reject) {
+        // The backend explicitly rejected the request; release the local guard.
+        await _clearPersistedTransaction(requestKey);
+      } else {
         // The service POST may have reached the backend even if the response timed out.
         // Persist an ambiguity marker because no transaction UUID was returned.
         await _markAmbiguousRequest(requestKey);
