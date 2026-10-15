@@ -493,7 +493,41 @@ class _OperationsScreenState extends State<OperationsScreen> {
     final type = '${op['type'] ?? 'دفع مسبق'}';
     final phone = '${op['phone'] ?? op['mobile'] ?? ''}'.trim();
     final amount = double.tryParse('${op['amount'] ?? 0}') ?? 0;
-    final isReady = '${op['status']}'.contains('جاهز') || '${op['status']}'.toLowerCase() == 'success' || '${op['status']}'.toLowerCase() == 'completed';
+    final statusValue = '${op['status'] ?? ''}'.trim().toLowerCase();
+    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(statusValue) || statusValue.contains('جاهز');
+    final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(statusValue);
+    final isReview = statusValue == 'manual_review';
+    final statusLabel = isReady
+        ? 'ناجح'
+        : isFailure
+            ? (statusValue == 'refunded' ? 'أُعيد الرصيد' : 'فشل')
+            : isReview
+                ? 'مراجعة'
+                : statusValue.isEmpty || statusValue == 'unknown'
+                    ? 'غير محسومة'
+                    : 'قيد المعالجة';
+    final statusColor = isReady
+        ? const Color(0xFF059669)
+        : isFailure
+            ? const Color(0xFFDC2626)
+            : const Color(0xFFB45309);
+    final statusBg = isReady
+        ? const Color(0xFFE8F8F0)
+        : isFailure
+            ? const Color(0xFFFEF2F2)
+            : const Color(0xFFFFFBEB);
+    final statusBorder = isReady
+        ? const Color(0xFFA7F3D0)
+        : isFailure
+            ? const Color(0xFFFECACA)
+            : const Color(0xFFFDE68A);
+    final statusIcon = isReady
+        ? Icons.check_circle_rounded
+        : isFailure
+            ? Icons.cancel_rounded
+            : isReview
+                ? Icons.support_agent_rounded
+                : Icons.access_time_rounded;
 
     return Container(
       decoration: BoxDecoration(
@@ -572,32 +606,22 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   ),
                 ),
 
-                // Left side: Status badge (جاهز with checkmark)
+                // Display the latest server state. Unknown and pending never mean success.
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isReady ? const Color(0xFFE8F8F0) : const Color(0xFFFFFBEB),
+                    color: statusBg,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isReady ? const Color(0xFFA7F3D0) : const Color(0xFFFDE68A),
-                    ),
+                    border: Border.all(color: statusBorder),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        isReady ? Icons.check_circle_rounded : Icons.access_time_rounded,
-                        color: isReady ? const Color(0xFF059669) : const Color(0xFFD97706),
-                        size: 16,
-                      ),
+                      Icon(statusIcon, color: statusColor, size: 16),
                       const SizedBox(width: 4),
                       Text(
-                        isReady ? 'جاهز' : 'قيد المعالجة',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: isReady ? const Color(0xFF059669) : const Color(0xFFD97706),
-                        ),
+                        statusLabel,
+                        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: statusColor),
                       ),
                     ],
                   ),
