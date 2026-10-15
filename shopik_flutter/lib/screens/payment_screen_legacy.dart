@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -128,6 +129,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   static const _nativeChannel = MethodChannel('com.shopik.app/heads_up_notifications');
   bool _isSyncing = false;
+  Timer? _offersInquiryDebounce;
+  String? _lastOffersInquiryPhone;
 
   // Accordion state
   final Map<String, bool> expandedCategories = {
@@ -872,6 +875,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void dispose() {
+    _offersInquiryDebounce?.cancel();
     phone.dispose();
     rechargeAmount.dispose();
     unitsCount.dispose();
@@ -979,18 +983,39 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final op = operators.firstWhere((o) => o.id == matchedOpId);
       setState(() {
         currentOpId = matchedOpId!;
-        activeMainTab = matchedOpId == 'yemen4g' ? 'باقة يمن 4G' : matchedOpId == 'yemen_net' ? 'الانترنت الارضي' : op.mainTabs.first;
-        operatorRestrictedToast = 'تم اختيار ${op.name} تلقائياً وفقاً لرقم الهاتف';
+        activeMainTab = matchedOpId == 'yemen4g'
+            ? 'باقة يمن 4G'
+            : matchedOpId == 'yemen_net'
+                ? 'الانترنت الارضي'
+                : op.mainTabs.first;
+        operatorRestrictedToast = 'تم اختيار ${op.name} تلقائيًا وفق رقم الهاتف';
       });
-      if (matchedOpId == 'yemen_mobile' && activeMainTab == 'باقات') {
-        _runInquiry('offers', quiet: true);
-      }
       Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) setState(() => operatorRestrictedToast = null);
+        if (mounted && operatorRestrictedToast?.startsWith('تم اختيار') == true) {
+          setState(() => operatorRestrictedToast = null);
+        }
       });
     }
-  }
 
+    // Debounce the live inquiry until the full Yemen Mobile number is entered.
+    if (currentOpId == 'yemen_mobile' &&
+        activeMainTab == 'باقات' &&
+        clean.length == 9 &&
+        (clean.startsWith('77') || clean.startsWith('78'))) {
+      if (_lastOffersInquiryPhone == clean) return;
+      _offersInquiryDebounce?.cancel();
+      _offersInquiryDebounce = Timer(const Duration(milliseconds: 450), () {
+        if (!mounted || phone.text.replaceAll(RegExp(r'\D'), '') != clean) return;
+        _lastOffersInquiryPhone = clean;
+        _runInquiry('offers', quiet: false);
+      });
+    } else {
+      _offersInquiryDebounce?.cancel();
+      if (clean.length < 9 || clean != _lastOffersInquiryPhone) {
+        _lastOffersInquiryPhone = null;
+      }
+    }
+  }
   void _selectOperator(_OperatorSpec op) {
     setState(() {
       currentOpId = op.id;
@@ -1000,18 +1025,26 @@ class _PaymentScreenState extends State<PaymentScreen> {
       balanceInquiryBanner = null;
     });
     if (currentOpId == 'yemen_mobile' && activeMainTab == 'باقات') {
-      _runInquiry('offers', quiet: false);
+      _lastOffersInquiryPhone = null;
+      if (phone.text.replaceAll(RegExp(r'\D'), '').length == 9) {
+        _runInquiry('offers', quiet: false);
+      } else {
+        _showInquiryNotice('أدخل رقم يمن موبايل كاملًا ليتم استعلام الباقات من الخادم.');
+      }
     }
   }
-
   void _selectMainTab(String t) {
     setState(() => activeMainTab = t);
     balanceInquiryBanner = null;
     if (currentOpId == 'yemen_mobile' && t == 'باقات') {
-      _runInquiry('offers', quiet: false);
+      _lastOffersInquiryPhone = null;
+      if (phone.text.replaceAll(RegExp(r'\D'), '').length == 9) {
+        _runInquiry('offers', quiet: false);
+      } else {
+        _showInquiryNotice('أدخل رقم يمن موبايل كاملًا ليتم استعلام الباقات من الخادم.');
+      }
     }
   }
-
   String _transactionStatus(Map<String, dynamic> tx) =>
       '${tx['status'] ?? ''}'.trim().toLowerCase();
 
