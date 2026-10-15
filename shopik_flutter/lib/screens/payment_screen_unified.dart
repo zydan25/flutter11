@@ -446,6 +446,55 @@ class _ServiceFormState extends State<_ServiceForm> {
     return payload;
   }
 
+  String _requestFingerprint(int serviceId, Map<String, dynamic> payload) {
+    final keys = payload.keys.toList()..sort();
+    final canonical = <String, dynamic>{
+      'user_id': widget.app.user?.id ?? 0,
+      'service_id': serviceId,
+      'item_id': _item?['id'],
+      'item_type': _item?['type'],
+      'payload': <String, dynamic>{for (final key in keys) key: payload[key]},
+    };
+    // Stable non-reversible fingerprint: neither phone numbers nor secrets are
+    // stored in the preference key.
+    var hash = 0x811c9dc5;
+    for (final byte in utf8.encode(jsonEncode(canonical))) {
+      hash ^= byte;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return 'shopik_pending_${widget.app.user?.id ?? 0}_${serviceId}_${hash.toRadixString(16)}';
+  }
+
+  Map<String, dynamic> _transactionForLocalRecovery(Map<String, dynamic> tx) {
+    const safeKeys = {
+      'id', 'service', 'service_kind', 'status', 'amount', 'currency',
+      'provider_transid', 'provider_transaction_id', 'error_code',
+      'error_message', 'result', 'created_at', 'completed_at',
+    };
+    return <String, dynamic>{
+      for (final entry in tx.entries)
+        if (safeKeys.contains(entry.key)) entry.key: entry.value,
+    };
+  }
+
+  Future<void> _persistPendingTransaction(String? key, Map<String, dynamic> tx) async {
+    if (key == null || key.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(key, jsonEncode(_transactionForLocalRecovery(tx)));
+    } catch (_) {
+      // Persistence is a recovery aid; server state remains authoritative.
+    }
+  }
+
+  Future<void> _clearPersistedTransaction(String? key) async {
+    if (key == null || key.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(key);
+    } catch (_) {}
+  }
+
   Future<void> _submit() async {
     if (_pendingTransaction != null) {
       await _reviewPendingTransaction();
