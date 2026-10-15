@@ -1061,6 +1061,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
   bool _isTransactionSuccess(Map<String, dynamic> tx) =>
       const {'success', 'completed', 'done', 'executed'}.contains(_transactionStatus(tx));
 
+  bool _isTransactionFailure(Map<String, dynamic> tx) =>
+      const {'failed', 'error', 'rejected', 'refunded'}.contains(_transactionStatus(tx));
+
   bool _isTransactionPending(Map<String, dynamic> tx) =>
       const {'accepted', 'queued', 'pending', 'pending_provider', 'processing', 'manual_review'}.contains(_transactionStatus(tx)) ||
       tx['_client_wait_timed_out'] == true;
@@ -2361,7 +2364,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             );
             return;
           }
-          if (existingTx != null && !_isTransactionPending(existingTx)) {
+          if (existingTx != null && _isTransactionFailure(existingTx)) {
             await _clearActivePayment(app);
           } else {
             if (!mounted) return;
