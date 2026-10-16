@@ -405,12 +405,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredOps = _searchQuery.isEmpty
-        ? _operations
-        : _operations.where((op) {
-            final text = '${op['service']} ${op['phone']} ${op['amount']} ${op['id']}'.toLowerCase();
-            return text.contains(_searchQuery.toLowerCase());
-          }).toList();
+    final app = context.read<AppController>();
+    final activeRecords = _selectedSection == 'inquiries' ? _inquiries : _operations;
+    final query = _searchQuery.toLowerCase();
+    final filteredOps = activeRecords.where((op) {
+      final searchable = [
+        _transactionServiceName(op, app),
+        _transactionPhone(op),
+        '${op['amount'] ?? ''}',
+        '${op['id'] ?? ''}',
+        '${op['status'] ?? ''}',
+        _transactionResponseText(op),
+      ].join(' ').toLowerCase();
+      return query.isEmpty || searchable.contains(query);
+    }).toList();
+    if (_sortByPhone) {
+      filteredOps.sort((a, b) => _transactionPhone(a).compareTo(_transactionPhone(b)));
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
