@@ -110,12 +110,14 @@ class _OperatorSpec {
 
 class _PaymentScreenState extends State<PaymentScreen> {
   final phone = TextEditingController(text: '');
+  final phoneFocusNode = FocusNode();
   final rechargeAmount = TextEditingController(text: '100');
   final unitsCount = TextEditingController(text: '10');
 
-  String currentOpId = 'yemen_mobile';
-  String activeMainTab = 'باقات';
-  String subFilter = 'دفع مسبق';
+  String currentOpId = '';
+  String activeMainTab = '';
+  String billingFilter = 'الكل';
+  String packageKindFilter = 'الكل';
   String sabafonRegion = 'شمال';
   bool youSmartCharger = false;
   String netTab = 'adsl';
@@ -126,7 +128,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   // Inquiry states (Loaded dynamically via live server inquiry)
   String ymPhoneBalance = '---';
   String ymPhoneType = '---';
-  String ymLoanStatus = 'none';
+  String ymLoanStatus = 'unknown';
   double ymLoanAmount = 0.0;
 
   Map<String, dynamic>? fourGInquiryData;
@@ -886,6 +888,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   @override
   void dispose() {
     _offersInquiryDebounce?.cancel();
+    phoneFocusNode.dispose();
     phone.dispose();
     rechargeAmount.dispose();
     unitsCount.dispose();
@@ -2939,125 +2942,45 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final op = currentOp;
 
     return ScreenFrame(
-      title: 'تسديد شبكات الاتصالات اليمنية',
+      title: 'شبكة السداد',
       color: op.headerColor,
       actions: [
-        IconButton(
-          onPressed: _syncTelecomPackages,
-          icon: _isSyncing
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                )
-              : const Icon(Icons.sync_rounded),
-          tooltip: 'مزامنة باقات وخدمات الاتصالات من الخادم',
-        ),
-        IconButton(
-          onPressed: () => _runInquiry('balance'),
-          icon: const Icon(Icons.refresh_rounded),
-          tooltip: 'تحديث الرصيد',
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              onTap: () => setState(() => userBalanceHidden = !userBalanceHidden),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('الرصيد', style: TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
+                    Text(
+                      userBalanceHidden ? '••••' : money(app.walletBalance),
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: () => _syncTelecomPackages(),
+              icon: _isSyncing
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.refresh_rounded),
+              tooltip: 'تحديث الرصيد والباقات من الخادم',
+            ),
+          ],
         ),
       ],
       child: ListView(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 80),
         children: [
-          // Top Header Balance Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: op.headerColor,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(color: op.headerColor.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 3)),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.account_balance_wallet_outlined, color: Colors.white70, size: 20),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () => setState(() => userBalanceHidden = !userBalanceHidden),
-                      child: Row(
-                        children: [
-                          Text(
-                            userBalanceHidden ? '••••••' : money(app.walletBalance),
-                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(width: 4),
-                          const Text('رصيدي', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: () => app.refreshAll(),
-                      icon: const Icon(Icons.sync_rounded, color: Colors.white, size: 16),
-                      label: const Text('تحديث', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          // Wallet balance and refresh are shown in the app header; do not repeat them here.
 
-          const SizedBox(height: 10),
-
-          // Circular Operators Row (مطابقة تامة لشبكات السداد)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE2E8F0))),
-            child: Column(
-              children: [
-                const Text('اختر شبكة السداد', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: operators.map((o) {
-                    final isSelected = o.id == currentOpId;
-                    return GestureDetector(
-                      onTap: () => _selectOperator(o),
-                      child: Column(
-                        children: [
-                          Container(
-                            width: 42,
-                            height: 42,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isSelected ? o.headerColor : Colors.white,
-                              border: Border.all(color: o.headerColor, width: isSelected ? 2.5 : 1.5),
-                              boxShadow: [
-                                if (isSelected) BoxShadow(color: o.headerColor.withOpacity(0.35), blurRadius: 8, offset: const Offset(0, 2)),
-                              ],
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              o.shortName,
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : o.headerColor,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(o.name, style: TextStyle(fontSize: 9, fontWeight: isSelected ? FontWeight.w900 : FontWeight.bold, color: isSelected ? o.headerColor : const Color(0xFF475569))),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-
-          // Operator Restriction Toast Banner
+                    // Operator Restriction Toast Banner
           if (operatorRestrictedToast != null) ...[
             const SizedBox(height: 8),
             Container(
@@ -3090,6 +3013,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 Expanded(
                   child: TextField(
                     controller: phone,
+                    focusNode: phoneFocusNode,
                     textDirection: TextDirection.ltr,
                     keyboardType: TextInputType.phone,
                     maxLength: 9,
@@ -3108,49 +3032,48 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   IconButton(
                     onPressed: () {
                       phone.clear();
-                      setState(() {});
+                      _handlePhoneChange('');
                     },
                     icon: const Icon(Icons.cancel_rounded, size: 18, color: Color(0xFF94A3B8)),
                   ),
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: op.headerColor),
-                  alignment: Alignment.center,
-                  child: Text(op.shortName, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                ),
+                if (currentOpId.isNotEmpty)
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: op.headerColor),
+                    alignment: Alignment.center,
+                    child: Text(op.shortName, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
               ],
             ),
           ),
 
           const SizedBox(height: 10),
 
-          // Dynamic Main Tabs Bar
-          _buildMainTabsBar(op),
-
-          const SizedBox(height: 12),
-
-          // TAB CONTENT
-          if (activeMainTab == 'باقات') ...[
-            _buildPackagesTab(op),
-          ] else if (activeMainTab == 'رصيد' || activeMainTab == 'رصيد يمن 4G') ...[
-            _buildBalanceTab(op),
-          ] else if (activeMainTab == 'فوري') ...[
-            _buildInstantTab(op),
-          ] else if (activeMainTab == 'باقة يمن 4G') ...[
-            _buildFourGTab(op),
-          ] else if (activeMainTab == 'الانترنت الارضي' || activeMainTab == 'الهاتف الثابت') ...[
-            _buildNetTab(op),
-          ] else ...[
-            // Default generic tab
-            PageCard(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('خدمة $activeMainTab مفعلة وجاهزة للمشغل ${op.name}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          if (currentOpId.isNotEmpty) ...[
+            // Dynamic Main Tabs Bar
+            _buildMainTabsBar(op),
+            const SizedBox(height: 12),
+            // TAB CONTENT
+            if (activeMainTab == 'باقات') ...[
+              _buildPackagesTab(op),
+            ] else if (activeMainTab == 'رصيد' || activeMainTab == 'رصيد يمن 4G') ...[
+              _buildBalanceTab(op),
+            ] else if (activeMainTab == 'فوري') ...[
+              _buildInstantTab(op),
+            ] else if (activeMainTab == 'باقة يمن 4G') ...[
+              _buildFourGTab(op),
+            ] else if (activeMainTab == 'الانترنت الارضي' || activeMainTab == 'الهاتف الثابت') ...[
+              _buildNetTab(op),
+            ] else ...[
+              PageCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: const Text('اختر نوع الخدمة بعد إدخال الرقم', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
               ),
-            ),
-          ],
-        ],
+            ],
+          ],        ],
       ),
     );
   }
