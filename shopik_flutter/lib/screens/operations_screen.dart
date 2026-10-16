@@ -291,7 +291,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
     }
   }
 
-  void _deleteOperation(int index) {
+  void _deleteOperation(Map<String, dynamic> operation) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -303,12 +303,17 @@ class _OperationsScreenState extends State<OperationsScreen> {
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
-              final op = _operations[index];
-              final id = '${op['id'] ?? ''}';
-              if (id.isNotEmpty) {
+              final id = '${operation['id'] ?? ''}';
+              if (id.isNotEmpty && _selectedSection == 'operations') {
                 context.read<AppController>().api.deleteServiceRequest(id);
               }
-              setState(() => _operations.removeAt(index));
+              setState(() {
+                final list = _selectedSection == 'inquiries' ? _inquiries : _operations;
+                final index = list.indexWhere((item) =>
+                    identical(item, operation) ||
+                    ('${item['id'] ?? ''}'.isNotEmpty && item['id'] == operation['id']));
+                if (index >= 0) list.removeAt(index);
+              });
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('تم حذف العملية من العرض')),
               );
@@ -683,10 +688,12 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   Widget _buildOperationCard(Map<String, dynamic> op, int index) {
-    final service = '${op['service'] ?? op['packageName'] ?? 'yem-balance'}';
-    final type = '${op['type'] ?? 'دفع مسبق'}';
-    final phone = '${op['phone'] ?? op['mobile'] ?? ''}'.trim();
+    final app = context.read<AppController>();
+    final service = _transactionServiceName(op, app);
+    final type = '${op['type'] ?? op['item_name'] ?? op['packageName'] ?? op['service_kind'] ?? 'عملية خدمة'}';
+    final phone = _transactionPhone(op);
     final amount = double.tryParse('${op['amount'] ?? 0}') ?? 0;
+    final serverResponse = _transactionResponseText(op);
     final statusValue = '${op['status'] ?? 'unknown'}'.trim().toLowerCase();
     final isReady = const {'success', 'completed', 'done', 'executed'}.contains(statusValue);
     final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(statusValue);
@@ -798,6 +805,15 @@ class _OperationsScreenState extends State<OperationsScreen> {
                           const Text('سعر العملية:', style: TextStyle(fontSize: 11, color: Color(0xFFB91C1C), fontWeight: FontWeight.bold)),
                         ],
                       ),
+                      if (serverResponse.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'رد الخادم: ${serverResponse.replaceAll('\n', ' ')}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 10, height: 1.35, color: Color(0xFF475569)),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -839,7 +855,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   label: 'حذف',
                   icon: Icons.delete_outline_rounded,
                   color: const Color(0xFFDC2626),
-                  onTap: () => _deleteOperation(index),
+                  onTap: () => _deleteOperation(op),
                 ),
                 // 2. تفاصيل
                 _buildActionBtn(
