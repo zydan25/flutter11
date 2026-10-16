@@ -1802,6 +1802,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) {
     final targetPhone = phone.text.trim();
     if (targetPhone.isEmpty) {
@@ -1833,6 +1834,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             itemId: itemId,
             itemType: itemType,
             itemCode: itemCode,
+            repayLoan: repayLoan,
           );
         },
       );
@@ -1845,6 +1847,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         itemId: itemId,
         itemType: itemType,
         itemCode: itemCode,
+        repayLoan: repayLoan,
       );
     }
   }
@@ -1945,6 +1948,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) {
     final targetPhone = phone.text.trim();
     final fallbackSpec = _resolveServiceForCurrentAction(
@@ -2293,6 +2297,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                     itemId: itemId,
                                     itemType: itemType,
                                     itemCode: itemCode,
+                                    repayLoan: repayLoan,
                                   );
                                 },
                                 style: FilledButton.styleFrom(
@@ -2437,6 +2442,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     required int? itemId,
     required String? itemType,
     required String? itemCode,
+    bool repayLoan = false,
   }) async {
     final loaded = await app.loadServiceContract(serviceId, force: true);
     final contract = loaded ?? app.serviceDetailsCache[serviceId];
@@ -2470,7 +2476,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final defaultValue = field['default'];
       dynamic value;
 
-      if (const {
+      if (repayLoan && const {'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount'}.contains(normalizedKey)) {
+        value = ymLoanAmount;
+      } else if (repayLoan && const {'loan', 'has_loan', 'hasloan', 'is_loan', 'isloan', 'repay_loan', 'repayloan', 'include_loan', 'includeloan', 'pay_loan', 'settle_loan', 'sulfa', 'has_sulfa', 'hassulfa'}.contains(normalizedKey)) {
+        value = true;
+      } else if (const {
         'mobile', 'phone', 'msisdn', 'mobile_number', 'phone_number',
         'subscriber_number', 'account_number', 'line_number', 'recipient_number',
         'target_phone', 'number',
@@ -2596,6 +2606,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) async {
     if (_paymentInProgress) {
       _showInquiryNotice('يوجد طلب سداد قيد المعالجة. انتظر نتيجته قبل إرسال طلب آخر.', isError: true);
@@ -2737,6 +2748,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         itemId: itemId,
         itemType: itemType,
         itemCode: itemCode,
+        repayLoan: repayLoan,
       );
       requestSent = true;
       final res = await app.api.submitAndPollServiceRequest(
