@@ -675,9 +675,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.inbox_rounded, size: 48, color: Color(0xFF94A3B8)),
-                            SizedBox(height: 8),
+                          children: [
+                            const Icon(Icons.inbox_rounded, size: 48, color: Color(0xFF94A3B8)),
+                            const SizedBox(height: 8),
                             Text(
                               _selectedSection == 'inquiries' ? 'لا توجد استعلامات مسجلة' : 'لا توجد عمليات مسجلة',
                               style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
