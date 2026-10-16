@@ -327,6 +327,22 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   void _printReceipt(Map<String, dynamic> op) {
+    final rawReceiptId = '${op['id'] ?? ''}'.trim();
+    final receiptId = rawReceiptId.isEmpty
+        ? 'غير متوفر'
+        : rawReceiptId.length > 8
+            ? rawReceiptId.substring(0, 8)
+            : rawReceiptId;
+    final app = context.read<AppController>();
+    final status = '${op['status'] ?? 'unknown'}'.trim().toLowerCase();
+    final statusLabel = const {'success', 'completed', 'done', 'executed'}.contains(status)
+        ? 'ناجح'
+        : const {'failed', 'error', 'rejected'}.contains(status)
+            ? 'فاشل'
+            : status == 'refunded'
+                ? 'أُعيد الرصيد'
+                : 'غير محسوم / قيد التنفيذ';
+    final response = _transactionResponseText(op);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -356,13 +372,14 @@ class _OperationsScreenState extends State<OperationsScreen> {
                 children: [
                   const Text('شبكة شبيك الإلكترونية المعتمدة', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFF8B1D3B))),
                   const SizedBox(height: 4),
-                  Text('رقم السند: #${op['id']?.toString().substring(0, 8) ?? '883921'}', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                  Text('رقم السند: #$receiptId', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
                   const Divider(height: 20),
-                  _receiptRow('الخدمة:', '${op['service'] ?? 'سداد إلكتروني'}'),
-                  _receiptRow('رقم الهاتف:', '${op['phone'] ?? '---'}'),
+                  _receiptRow('الخدمة:', _transactionServiceName(op, app)),
+                  _receiptRow('رقم الهاتف:', _transactionPhone(op).isEmpty ? '---' : _transactionPhone(op)),
                   _receiptRow('المبلغ:', '${op['amount']} ريال يمني'),
-                  _receiptRow('الحالة:', 'جاهز ومكتمل ✅'),
-                  _receiptRow('التاريخ:', '${op['created_at'] ?? '2026-09-09'}'),
+                  _receiptRow('الحالة:', statusLabel),
+                  _receiptRow('التاريخ:', '${op['created_at'] ?? 'غير متوفر'}'),
+                  if (response.isNotEmpty) _receiptRow('رد الخادم:', response),
                 ],
               ),
             ),
