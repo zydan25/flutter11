@@ -107,6 +107,41 @@ class OperationsScreen extends StatefulWidget {
 }
 
 class _OperationsScreenState extends State<OperationsScreen> {
+  Widget _buildSectionChoice({
+    required String label,
+    required int count,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF8B1D3B) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: selected ? Colors.white : const Color(0xFF334155)))),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: selected ? Colors.white.withOpacity(0.18) : const Color(0xFFE2E8F0),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text('$count', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: selected ? Colors.white : const Color(0xFF334155))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   String _selectedAccount = 'الحساب الرئيسي';
   String _selectedBranch = 'اختر النقطة , الفرع';
   DateTime _selectedDate = DateTime(2026, 9, 9);
@@ -440,18 +475,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
                 autofocus: true,
                 style: const TextStyle(color: Colors.white, fontSize: 13),
                 decoration: const InputDecoration(
-                  hintText: 'بحث في العمليات...',
+                  hintText: 'بحث بالرقم أو الخدمة أو رد الخادم...',
                   hintStyle: TextStyle(color: Colors.white70, fontSize: 13),
                   border: InputBorder.none,
                 ),
                 onChanged: (val) => setState(() => _searchQuery = val.trim()),
               )
-            : const Text(
-                'العمليات',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
+            : Text(
+                _selectedSection == 'inquiries' ? 'الاستعلامات' : 'العمليات',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
               ),
         centerTitle: true,
         actions: [
+          IconButton(
+            tooltip: _sortByPhone ? 'إلغاء الفرز حسب رقم الهاتف' : 'فرز حسب رقم الهاتف',
+            icon: Icon(_sortByPhone ? Icons.sort_by_alpha_rounded : Icons.phone_iphone_rounded, color: Colors.white),
+            onPressed: () => setState(() => _sortByPhone = !_sortByPhone),
+          ),
           IconButton(
             icon: Icon(_showSearchField ? Icons.close_rounded : Icons.search_rounded, color: Colors.white),
             onPressed: () {
@@ -472,6 +512,31 @@ class _OperationsScreenState extends State<OperationsScreen> {
       ),
       body: Column(
         children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildSectionChoice(
+                    label: 'العمليات',
+                    count: _operations.length,
+                    selected: _selectedSection == 'operations',
+                    onTap: () => setState(() => _selectedSection = 'operations'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildSectionChoice(
+                    label: 'الاستعلامات',
+                    count: _inquiries.length,
+                    selected: _selectedSection == 'inquiries',
+                    onTap: () => setState(() => _selectedSection = 'inquiries'),
+                  ),
+                ),
+              ],
+            ),
+          ),
           // Filter Row 1: Dropdowns (Matching Screenshot 3)
           Container(
             color: Colors.white,
@@ -591,7 +656,10 @@ class _OperationsScreenState extends State<OperationsScreen> {
                           children: const [
                             Icon(Icons.inbox_rounded, size: 48, color: Color(0xFF94A3B8)),
                             SizedBox(height: 8),
-                            Text('لا توجد عمليات مسجلة لهذا التاريخ', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
+                            Text(
+                              _selectedSection == 'inquiries' ? 'لا توجد استعلامات مسجلة' : 'لا توجد عمليات مسجلة',
+                              style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
+                            ),
                           ],
                         ),
                       )
