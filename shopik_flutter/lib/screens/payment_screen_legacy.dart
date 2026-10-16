@@ -1071,6 +1071,70 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String _transactionMessage(Map<String, dynamic> tx) =>
       '${tx['error_message'] ?? tx['message'] ?? tx['detail'] ?? tx['error'] ?? ''}'.trim();
 
+  String? _serverMobileBillingType(Map<String, dynamic> data) {
+    final raw = data['mobileType'] ??
+        data['mobile_type'] ??
+        data['mobileTypeName'] ??
+        data['mobile_type_name'] ??
+        data['subscriber_type'] ??
+        data['billing_type'];
+    final value = '\${raw ?? ''}'.trim().toLowerCase();
+    if (value.isEmpty) return null;
+    if (const {'1', 'prepaid', 'pre_paid', 'pre paid', 'pre-paid'}.contains(value) ||
+        value.contains('دفع مسبق') ||
+        value.contains('مسبق')) {
+      return 'دفع مسبق';
+    }
+    if (const {'2', 'postpaid', 'post_paid', 'post paid', 'post-paid', 'billing'}.contains(value) ||
+        value.contains('فوترة') ||
+        value.contains('فوتر')) {
+      return 'فوترة';
+    }
+    return null;
+  }
+
+  double _serverLoanAmount(Map<String, dynamic> data) {
+    for (final key in const [
+      'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+      'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+    ]) {
+      if (data.containsKey(key) && data[key] != null) {
+        final value = double.tryParse('\${data[key]}'.trim());
+        if (value != null && value >= 0) return value;
+      }
+    }
+    return 0;
+  }
+
+  bool? _serverHasLoan(Map<String, dynamic> data) {
+    for (final key in const [
+      'loan', 'has_loan', 'hasLoan', 'is_loan', 'isLoan',
+      'sulfa', 'has_sulfa', 'hasSulfa', 'loan_status',
+    ]) {
+      if (!data.containsKey(key) || data[key] == null) continue;
+      final raw = data[key];
+      if (raw is bool) return raw;
+      final value = '\$raw'.trim().toLowerCase();
+      if (const {'1', 'true', 'yes', 'yes loan', 'loan', 'متسلف', 'نعم'}.contains(value)) return true;
+      if (const {'0', 'false', 'no', 'none', 'no loan', 'غير متسلف', 'لا'}.contains(value)) return false;
+      if (value.contains('متسلف') && !value.contains('غير متسلف')) return true;
+      if (value.contains('غير متسلف')) return false;
+    }
+    final amountKeys = const [
+      'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+      'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+    ];
+    if (amountKeys.any(data.containsKey)) return _serverLoanAmount(data) > 0;
+    return null;
+  }
+
+  String _phoneInquiryTypeLabel(Map<String, dynamic> result) {
+    final billing = _serverMobileBillingType(result);
+    if (billing == 'فوترة') return 'فوترة | شريحة';
+    if (billing == 'دفع مسبق') return 'دفع مسبق | شريحة';
+    return 'نوع الشريحة غير محدد من الخادم';
+  }
+
   void _showInquiryNotice(String message, {bool isError = false}) {
     if (!mounted) return;
     setState(() => operatorRestrictedToast = message);
