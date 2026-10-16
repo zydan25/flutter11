@@ -422,7 +422,7 @@ class AppController extends ChangeNotifier {
 
     final targetIds = <int>{1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 60, 61};
     final settingKeys = [
-      'bagatmobileget', 'yemen_mobile_packages_list', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
+      'bagatmobileget', 'yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_pay_activate', 'yemen_mobile_package_activate_only', 'yemen_mobile_activate_package', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
       'bagatsabafonget', 'sabafon_packages_legacy', 'sabafon_north_packages_list', 'featsabafon', 'sabafon_north_denominations_list',
       'bagatyouget', 'bagatyou', 'you_packages_list', 'featyou', 'you_denominations_list',
       'bagatwayget', 'wai_packages_list', 'featway', 'wai_denominations_list',
@@ -452,7 +452,7 @@ class AppController extends ChangeNotifier {
     final idsToPreload = <int>{};
     // Extract configured IDs or default to primary telecom service IDs
     final keys = [
-      'bagatmobileget', 'yemen_mobile_packages_list', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
+      'bagatmobileget', 'yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_pay_activate', 'yemen_mobile_package_activate_only', 'yemen_mobile_activate_package', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
       'bagatsabafonget', 'sabafon_packages_legacy', 'sabafon_north_packages_list', 'featsabafon', 'sabafon_north_denominations_list', 'sabafon_instant_recharge',
       'bagatyouget', 'bagatyou', 'you_packages_list', 'featyou', 'you_denominations_list', 'you_instant_recharge_legacy',
       'bagatwayget', 'wai_packages_list', 'featway', 'wai_denominations_list',
