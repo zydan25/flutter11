@@ -1523,18 +1523,90 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
 
+
+  bool _matchesServerPackageItem(_PackageItem pkg, Map<String, dynamic> item) {
+    final sourceType = '${pkg.rawItem?['type'] ?? ''}'.trim().toLowerCase();
+    final targetType = '${item['type'] ?? ''}'.trim().toLowerCase();
+    if (sourceType.isNotEmpty && targetType.isNotEmpty && sourceType != targetType) return false;
+
+    Map<String, dynamic> metadata(Map<String, dynamic> value) =>
+        value['metadata'] is Map ? Map<String, dynamic>.from(value['metadata'] as Map) : <String, dynamic>{};
+    final sourceMeta = metadata(pkg.rawItem ?? <String, dynamic>{});
+    final targetMeta = metadata(item);
+    final sourceCode = '${pkg.code.isNotEmpty ? pkg.code : (sourceMeta['provider_offer_code'] ?? sourceMeta['exact_api_code'] ?? sourceMeta['package_code'] ?? '')}'.trim().toLowerCase();
+    final targetCode = '${targetMeta['provider_offer_code'] ?? targetMeta['exact_api_code'] ?? targetMeta['package_code'] ?? item['code'] ?? item['external_code'] ?? ''}'.trim().toLowerCase();
+    if (sourceCode.isNotEmpty && targetCode.isNotEmpty && sourceCode == targetCode) return true;
+    return '${pkg.name}'.trim().toLowerCase() == '${item['name'] ?? ''}'.trim().toLowerCase();
+  }
+
+  List<int> _yemenMobilePackageServiceCandidates(AppController app, _PackageItem pkg) {
+    final ids = <int>[];
+    void add(dynamic value) {
+      final id = int.tryParse('${value ?? ''}');
+      if (id != null && id > 0 && !ids.contains(id)) ids.add(id);
+    }
+
+    // Prefer configured purchase-service keys, but still validate the server contract.
+    const preferredKeys = [
+      'yemen_mobile_package_pay_activate',
+      'yemen_mobile_package_pay',
+      'yemen_mobile_packages_pay',
+      'yemen_mobile_packages_activate',
+      'bagatmobileget',
+      'yemen_mobile_packages_list',
+    ];
+    for (final key in preferredKeys) {
+      add(app.getServiceId(key));
+    }
+    for (final setting in app.serviceSettingsRaw) {
+      final key = '${setting['key'] ?? ''}'.trim().toLowerCase();
+      if (key.contains('yemen_mobile') &&
+          key.contains('package') &&
+          (key.contains('pay') || key.contains('activat') || key.contains('bagat') || key.contains('list'))) {
+        add(setting['service_id'] ?? (setting['service'] is Map ? setting['service']['id'] : null));
+      }
+    }
+    add(pkg.serviceId);
+    // Legacy IDs are only candidates; their service type is always checked below.
+    add(3);
+    add(4);
+    return ids;
+  }
+
+  Map<String, dynamic>? _serverPurchaseContractMatchingPackage(AppController app, _PackageItem pkg) {
+    for (final serviceId in _yemenMobilePackageServiceCandidates(app, pkg)) {
+      final contract = app.serviceDetailsCache[serviceId];
+      if (contract == null) continue;
+      if ('${contract['service_kind'] ?? ''}'.trim().toLowerCase() != 'purchase' ||
+          contract['requires_balance'] != true) continue;
+      final items = contract['items'];
+      if (items is! List) continue;
+      for (final raw in items.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(raw);
+        if (_matchesServerPackageItem(pkg, item)) {
+          return <String, dynamic>{
+            'service_id': serviceId,
+            'contract': contract,
+            'item': item,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
   bool _serverSupportsLoanAddition(_PackageItem pkg, AppController app) {
-    final serviceId = pkg.serviceId > 0
-        ? pkg.serviceId
-        : _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app).id;
-    final contract = app.serviceDetailsCache[serviceId];
-    if (contract == null || '${contract['pricing_mode'] ?? ''}'.toLowerCase() != 'amount') return false;
+    final match = _serverPurchaseContractMatchingPackage(app, pkg);
+    if (match == null) return false;
+    final contract = Map<String, dynamic>.from(match['contract'] as Map);
+    if ('${contract['pricing_mode'] ?? ''}'.trim().toLowerCase() != 'amount') return false;
     final fields = contract['fields'];
     if (fields is! List) return false;
     const loanKeys = {
       'loan', 'has_loan', 'hasloan', 'repay_loan', 'repayloan',
       'include_loan', 'includeloan', 'pay_loan', 'settle_loan',
       'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount',
+      'loan_balance', 'loanbalance',
     };
     final keys = fields.whereType<Map>()
         .map((field) => '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_'))
@@ -1542,6 +1614,65 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final hasAmountField = keys.any((key) => const {'amount', 'value', 'payment_amount'}.contains(key));
     final hasLoanField = keys.any((key) => loanKeys.contains(key));
     return hasAmountField && hasLoanField;
+  }
+
+  Future<void> _submitYemenMobilePackageAction(
+    _PackageItem pkg,
+    BuildContext sheetContext, {
+    required bool repayLoan,
+  }) async {
+    final app = context.read<AppController>();
+    final resolved = _serverPurchaseContractMatchingPackage(app, pkg);
+    if (resolved == null) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice(
+        'لم نعثر في كتالوج الخادم على خدمة شراء مهيأة لهذه الباقة بالاسم/الكود نفسه. لم نرسل أي طلب لتجنب تسديد خاطئ.',
+        isError: true,
+      );
+      return;
+    }
+    final contract = Map<String, dynamic>.from(resolved['contract'] as Map);
+    final item = Map<String, dynamic>.from(resolved['item'] as Map);
+    final serviceId = int.tryParse('${resolved['service_id']}') ?? 0;
+    final itemId = int.tryParse('${item['id'] ?? ''}') ?? 0;
+    final itemType = '${item['type'] ?? ''}'.trim();
+    final serverPrice = double.tryParse('${item['price'] ?? ''}');
+    if (serviceId <= 0 || itemId <= 0 || itemType.isEmpty || serverPrice == null || serverPrice <= 0) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('بيانات الخدمة أو الباقة غير مكتملة في الخادم؛ لم يتم إرسال السداد.', isError: true);
+      return;
+    }
+    if ((serverPrice - pkg.price).abs() > 0.009) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice(
+        'سعر الباقة في خدمة الشراء (${serverPrice.toStringAsFixed(2)} ر.ي) يختلف عن المعروض (${pkg.price.toStringAsFixed(2)} ر.ي). حدّث الباقات قبل المتابعة.',
+        isError: true,
+      );
+      return;
+    }
+    if (repayLoan && !_serverSupportsLoanAddition(pkg, app)) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة الشراء في الخادم لا تعلن حقولًا صريحة لدفع السلفة؛ لم نرسل مبلغًا قد يؤدي إلى خصم غير صحيح.', isError: true);
+      return;
+    }
+    final fields = contract['fields'];
+    if (fields is! List || fields.isEmpty) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة الشراء لا تحتوي على حقول طلب مفعلة في الخادم.', isError: true);
+      return;
+    }
+    if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+    final serviceName = '${contract['name'] ?? 'تفعيل باقة يمن موبايل'}';
+    _openConfirmPaymentDialog(
+      itemName: pkg.name + (repayLoan ? ' + تسديد السلفة' : ''),
+      amount: serverPrice + (repayLoan ? ymLoanAmount : 0),
+      serviceId: serviceId,
+      serviceName: serviceName,
+      itemId: itemId,
+      itemType: itemType,
+      itemCode: pkg.code,
+      repayLoan: repayLoan,
+    );
   }
 
   Future<void> _submitYemenMobileBalanceForPackage(_PackageItem pkg, BuildContext sheetContext) async {
