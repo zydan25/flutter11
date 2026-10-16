@@ -1001,7 +1001,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           currentOpId = matchedOpId!;
           activeMainTab = op.mainTabs.contains('باقات') ? 'باقات' : op.mainTabs.first;
           billingFilter = 'الكل';
-          packageKindFilter = 'الكل';
+          packageKindFilter = 'شريحة';
           operatorRestrictedToast = null;
           balanceInquiryBanner = null;
           activeSubscriptions = [];
@@ -1494,6 +1494,114 @@ class _PaymentScreenState extends State<PaymentScreen> {
       return '$thWord و${_getArabicAmountWords(rem.toDouble())}';
     }
     return '$val ريال يمني';
+  }
+
+
+  bool _serverSupportsLoanAddition(_PackageItem pkg, AppController app) {
+    final serviceId = pkg.serviceId > 0
+        ? pkg.serviceId
+        : _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app).id;
+    final contract = app.serviceDetailsCache[serviceId];
+    if (contract == null || '${contract['pricing_mode'] ?? ''}'.toLowerCase() != 'amount') return false;
+    final fields = contract['fields'];
+    if (fields is! List) return false;
+    const loanKeys = {
+      'loan', 'has_loan', 'hasloan', 'repay_loan', 'repayloan',
+      'include_loan', 'includeloan', 'pay_loan', 'settle_loan',
+      'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount',
+    };
+    return fields.whereType<Map>().any((field) {
+      final key = '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_');
+      return loanKeys.contains(key);
+    });
+  }
+
+  Future<void> _submitYemenMobileBalanceForPackage(_PackageItem pkg, BuildContext sheetContext) async {
+    final app = context.read<AppController>();
+    final serviceId = app.getServiceId('yemen_mobile_recharge', defaultId: 1) ?? 1;
+    Map<String, dynamic>? contract;
+    try {
+      contract = await app.loadServiceContract(serviceId, force: true);
+    } catch (_) {}
+    if (!mounted) return;
+    final pricingMode = '${contract?['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    final kind = '${contract?['service_kind'] ?? ''}'.trim().toLowerCase();
+    if (contract == null || pricingMode != 'amount' || (kind.isNotEmpty && kind != 'purchase')) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة «تسديد الرصيد» غير مهيأة كخدمة مبلغ قابل للإدخال في الخادم؛ لم يتم إرسال أي طلب.', isError: true);
+      return;
+    }
+    final serviceName = '${contract['name'] ?? app.getServiceName('yemen_mobile_recharge', serviceId: serviceId, defaultName: 'تسديد رصيد يمن موبايل')}';
+    Navigator.of(sheetContext).pop();
+    _openConfirmPaymentDialog(
+      itemName: 'تسديد رصيد يمن موبايل',
+      amount: pkg.price,
+      serviceId: serviceId,
+      serviceName: serviceName,
+    );
+  }
+
+  Future<void> _submitYemenMobileActivationOnly(_PackageItem pkg, BuildContext sheetContext) async {
+    final app = context.read<AppController>();
+    final serviceId = app.getServiceId(
+      'yemen_mobile_package_activate_only',
+      fallbacks: ['yemen_mobile_activate_package', 'yemen_mobile_packages_activate_only'],
+    );
+    if (serviceId == null || serviceId <= 0) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة «تفعيل فقط» غير مرتبطة بخدمة مستقلة في إعدادات الخادم. لم يتم إرسال أي طلب لتجنب تنفيذ تسديد + تفعيل بدلًا منها.', isError: true);
+      return;
+    }
+
+    Map<String, dynamic>? contract;
+    try {
+      contract = await app.loadServiceContract(serviceId, force: true);
+    } catch (_) {}
+    if (!mounted) return;
+    final items = contract?['items'];
+    if (contract == null || items is! List) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('تعذر تحميل كتالوج خدمة «تفعيل فقط» من الخادم.', isError: true);
+      return;
+    }
+    final wantedCode = pkg.code.trim().toLowerCase();
+    final wantedName = pkg.name.trim().toLowerCase();
+    Map<String, dynamic>? match;
+    for (final raw in items.whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final metadata = item['metadata'] is Map ? Map<String, dynamic>.from(item['metadata'] as Map) : <String, dynamic>{};
+      final code = '${metadata['provider_offer_code'] ?? metadata['exact_api_code'] ?? metadata['package_code'] ?? item['code'] ?? item['external_code'] ?? ''}'.trim().toLowerCase();
+      final name = '${item['name'] ?? ''}'.trim().toLowerCase();
+      if ((wantedCode.isNotEmpty && code == wantedCode) || name == wantedName) {
+        match = item;
+        break;
+      }
+    }
+    final matched = match;
+    if (matched == null) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('الخادم لم يوفر الباقة «${pkg.name}» ضمن كتالوج «تفعيل فقط». لم ننفذ أي عملية.', isError: true);
+      return;
+    }
+    final itemId = int.tryParse('${matched['id'] ?? ''}') ?? 0;
+    final itemType = '${matched['type'] ?? ''}'.trim();
+    if (itemId <= 0 || itemType.isEmpty) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('بيانات الباقة في خدمة «تفعيل فقط» غير مكتملة في الخادم.', isError: true);
+      return;
+    }
+    final amount = double.tryParse('${matched['price'] ?? ''}') ?? pkg.price;
+    final name = '${contract['name'] ?? app.getServiceName('yemen_mobile_package_activate_only', serviceId: serviceId, defaultName: 'يمن موبايل - تفعيل فقط')}';
+    Navigator.of(sheetContext).pop();
+    _openConfirmPaymentDialog(
+      itemName: 'تفعيل فقط - ${pkg.name}',
+      amount: amount,
+      serviceId: serviceId,
+      serviceName: name,
+      itemId: itemId,
+      itemType: itemType,
+      itemCode: wantedCode,
+    );
   }
 
   void _openPackageModal(_PackageItem pkg) {
