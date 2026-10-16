@@ -1361,6 +1361,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final res = Map<String, dynamic>.from(rawResult);
 
         String? liveBalance = '${res['balance'] ?? ''}'.trim();
+        String? balanceInquiryId;
         // The balance endpoint is authoritative for billing type and loan. A package
         // response may contain a default "no loan" flag, so query balance whenever
         // this subscriber has not yet been checked for the current number.
@@ -1374,6 +1375,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
           try {
             final balanceTx = await app.api.queryYemenMobileBalance(normalizedPhone);
             if (_isTransactionSuccess(balanceTx) && balanceTx['result'] is Map) {
+              final fetchedInquiryId = '${balanceTx['id'] ?? balanceTx['transaction_id'] ?? ''}'.trim();
+              if (fetchedInquiryId.isNotEmpty) balanceInquiryId = fetchedInquiryId;
               final balanceResult = Map<String, dynamic>.from(balanceTx['result'] as Map);
               const authoritativeKeys = {
                 'balance', 'mobileType', 'mobile_type', 'mobileTypeName',
@@ -1421,6 +1424,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             activeSubscriptions = subscriptions;
             ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
             ymLoanAmount = loanAmount;
+            if (balanceInquiryId != null) ymLoanInquiryTransactionId = balanceInquiryId;
             ymPhoneType = mobileType;
             if (billing != null) billingFilter = billing;
             if (liveBalance != null && liveBalance!.isNotEmpty) ymPhoneBalance = '$liveBalance ر.ي';
@@ -1494,12 +1498,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final rawResult = tx['result'];
         if (rawResult is! Map) throw Exception('لم يرجع الخادم تفاصيل السلفة.');
         final res = Map<String, dynamic>.from(rawResult);
+        final inquiryId = '${tx['id'] ?? tx['transaction_id'] ?? ''}'.trim();
         final loanAmount = _serverLoanAmount(res);
         final hasLoan = _serverHasLoan(res);
         final billing = _serverMobileBillingType(res);
         if (mounted) {
           setState(() {
             ymLoanAmount = loanAmount;
+            ymLoanInquiryTransactionId = inquiryId.isEmpty ? null : inquiryId;
             ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
             ymPhoneType = _phoneInquiryTypeLabel(res);
             if (billing != null) billingFilter = billing;
