@@ -1344,20 +1344,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
           }
         }
 
-        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
-        final hasLoan = res['loan'] == true || loanAmount > 0;
-        final rawMobileType = '${res['mobileType'] ?? ''}'.trim();
-        final mobileType = rawMobileType == '2'
-            ? 'فوترة | شريحة'
-            : rawMobileType == '1'
-                ? 'دفع مسبق | شريحة'
-                : 'نوع الشريحة غير محدد من الخادم';
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        final billing = _serverMobileBillingType(res);
+        final mobileType = _phoneInquiryTypeLabel(res);
         if (mounted) {
           setState(() {
             activeSubscriptions = subscriptions;
-            ymLoanStatus = hasLoan ? 'loan' : 'none';
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
             ymLoanAmount = loanAmount;
             ymPhoneType = mobileType;
+            if (billing != null) billingFilter = billing;
             if (liveBalance != null && liveBalance!.isNotEmpty) ymPhoneBalance = '$liveBalance ر.ي';
           });
         }
