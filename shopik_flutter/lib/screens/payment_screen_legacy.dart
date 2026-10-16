@@ -492,10 +492,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   String _resolveSubCategory(String text) {
-    if (text.contains('فوتر') || text.contains('فوترة') || text.toLowerCase().contains('postpaid')) {
-      return 'فوترة';
-    }
-    return 'دفع مسبق';
+    final lower = text.toLowerCase();
+    if (text.contains('فوتر') || text.contains('فوترة') || lower.contains('postpaid') || lower.contains('post_paid')) return 'فوترة';
+    if (text.contains('دفع مسبق') || lower.contains('prepaid') || lower.contains('pre_paid')) return 'دفع مسبق';
+    return _serverMobileBillingType({'mobileType': ymPhoneType}) ?? 'غير محدد';
   }
 
   String _buildSubTitle(Map<String, dynamic> it, Map<String, dynamic> meta, String text, _OperatorSpec op) {
@@ -3179,6 +3179,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
   }
 
+
+  bool _packageMatchesBillingFilter(_PackageItem pkg) {
+    if (billingFilter == 'الكل') return true;
+    final metadata = pkg.rawItem?['metadata'] is Map
+        ? Map<String, dynamic>.from(pkg.rawItem!['metadata'] as Map)
+        : <String, dynamic>{};
+    final text = '${pkg.name} ${pkg.subTitle} ${pkg.description} ${metadata['billing_type'] ?? ''} ${metadata['mobile_type'] ?? ''}'.toLowerCase();
+    final isPostpaid = text.contains('فوترة') || text.contains('فوتر') || text.contains('postpaid') || text.contains('post_paid');
+    final isPrepaid = text.contains('دفع مسبق') || text.contains('prepaid') || text.contains('pre_paid');
+    if (isPostpaid) return billingFilter == 'فوترة';
+    if (isPrepaid) return billingFilter == 'دفع مسبق';
+    final serverBilling = _serverMobileBillingType({'mobileType': ymPhoneType});
+    return serverBilling == null || serverBilling == billingFilter;
+  }
+
+  bool _packageMatchesKindFilter(_PackageItem pkg) {
+    if (packageKindFilter == 'الكل') return true;
+    final metadata = pkg.rawItem?['metadata'] is Map
+        ? Map<String, dynamic>.from(pkg.rawItem!['metadata'] as Map)
+        : <String, dynamic>{};
+    final text = '${pkg.name} ${pkg.subTitle} ${pkg.description} '
+        '${metadata['package_kind'] ?? metadata['chip_type'] ?? metadata['activation_type'] ?? metadata['medium'] ?? ''}'.toLowerCase();
+    final hasSim = text.contains('شريحة') || text.contains('شريحه') || text.contains('sim');
+    final hasProgramming = text.contains('برمجة') || text.contains('برمجه') || text.contains('program');
+    if (hasSim && hasProgramming) return true;
+    if (packageKindFilter == 'شريحة') return hasSim || !hasProgramming;
+    if (packageKindFilter == 'برمجة') return hasProgramming || !hasSim;
+    return true;
+  }
+
   Widget _buildPackagesTab(_OperatorSpec op) {
     final app = context.watch<AppController>();
     final Map<String, List<_PackageItem>> pkgMap = _getPackagesForOp(op, app);
@@ -3228,7 +3258,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      ymLoanStatus == 'none' ? 'غير متسلف 😀' : 'متسلف 122.0 ⚠️',
+                      ymLoanStatus == 'loan'
+                          ? 'متسلف ${ymLoanAmount.toStringAsFixed(2)} ر.ي ⚠️'
+                          : ymLoanStatus == 'none'
+                              ? 'غير متسلف'
+                              : 'السلفة غير مفحوصة',
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: ymLoanStatus == 'none' ? AppColors.emerald : Colors.red),
                     ),
                   ],
@@ -3240,30 +3274,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
         const SizedBox(height: 10),
 
-        // Sub-filters (دفع مسبق / فوترة / شريحة / برمجة / 4G)
-        SizedBox(
-          height: 32,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: ['دفع مسبق', 'فوترة', 'شريحة', 'برمجة', '4G'].map((sub) {
-              final isSel = sub == subFilter;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: ChoiceChip(
-                  label: Text(sub, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSel ? Colors.white : const Color(0xFF64748B))),
-                  selected: isSel,
-                  selectedColor: op.activeTabColor,
-                  backgroundColor: Colors.white,
-                  onSelected: (_) => setState(() => subFilter = sub),
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-
-        const SizedBox(height: 10),
-
-        // Active Subscriptions Card (الاشتراكات الحالية)
+        // Active Subscriptions Card// Active Subscriptions Card (الاشتراكات الحالية)
         if (op.id == 'yemen_mobile' && activeSubscriptions.isNotEmpty) ...[
           Container(
             decoration: BoxDecoration(
@@ -3319,37 +3330,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
           const SizedBox(height: 10),
         ],
 
-        // Horizontal Package Filter Chips (الكل, دفع مسبق, فوترة, شريحة, برمجة, 4G)
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: ['الكل', 'دفع مسبق', 'فوترة', 'شريحة', 'برمجة', '4G'].map((f) {
-              final isSel = subFilter == f;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: InkWell(
-                  onTap: () => setState(() => subFilter = f),
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: isSel ? op.headerColor : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: isSel ? op.headerColor : const Color(0xFFCBD5E1)),
-                    ),
-                    child: Text(
-                      f,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: isSel ? Colors.white : const Color(0xFF475569),
-                      ),
-                    ),
+        // Independent filters: billing type AND SIM/programming.
+        Widget filterRow(List<String> options, String selected, ValueChanged<String> onSelected) {
+          return SizedBox(
+            height: 34,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: options.map((option) {
+                final isSelected = selected == option;
+                return Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: ChoiceChip(
+                    label: Text(option, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: isSelected ? Colors.white : const Color(0xFF475569))),
+                    selected: isSelected,
+                    selectedColor: op.headerColor,
+                    backgroundColor: Colors.white,
+                    side: BorderSide(color: isSelected ? op.headerColor : const Color(0xFFCBD5E1)),
+                    onSelected: (_) => onSelected(isSelected ? 'الكل' : option),
                   ),
-                ),
-              );
-            }).toList(),
-          ),
+                );
+              }).toList(),
+            ),
+          );
+        }
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            filterRow(['دفع مسبق', 'فوترة'], billingFilter, (v) => setState(() => billingFilter = v)),
+            const SizedBox(height: 4),
+            filterRow(['شريحة', 'برمجة'], packageKindFilter, (v) => setState(() => packageKindFilter = v)),
+          ],
         ),
         const SizedBox(height: 10),
 
@@ -3358,28 +3368,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
           final catTitle = entry.key;
           final allPkgs = entry.value;
 
-          // Filter packages based on selected chip
-          final pkgs = allPkgs.where((pkg) {
-            if (subFilter == 'الكل') return true;
-            if (subFilter == 'دفع مسبق') {
-              return pkg.subTitle.contains('دفع مسبق') || pkg.name.contains('دفع مسبق') || !pkg.subTitle.contains('فوتر');
-            }
-            if (subFilter == 'فوترة') {
-              return pkg.subTitle.contains('فوتر') || pkg.name.contains('فوتر') || pkg.name.contains('فوترة');
-            }
-            if (subFilter == 'شريحة') {
-              return pkg.subTitle.contains('شريحة') || pkg.name.contains('شريحة') || pkg.category.contains('شريحة');
-            }
-            if (subFilter == 'برمجة') {
-              return pkg.subTitle.contains('برمجة') || pkg.name.contains('برمجة');
-            }
-            if (subFilter == '4G') {
-              return pkg.name.contains('4G') || pkg.name.contains('فورجي') || pkg.category.contains('4G') || pkg.category.contains('فورجي');
-            }
-            return true;
-          }).toList();
+          // Both filters apply together; unknown catalog metadata remains visible.
+          final pkgs = allPkgs.where((pkg) =>
+              _packageMatchesBillingFilter(pkg) && _packageMatchesKindFilter(pkg)).toList();
 
-          if (pkgs.isEmpty && subFilter != 'الكل') {
+          if (pkgs.isEmpty && (billingFilter != 'الكل' || packageKindFilter != 'الكل')) {
             return const SizedBox.shrink();
           }
 
