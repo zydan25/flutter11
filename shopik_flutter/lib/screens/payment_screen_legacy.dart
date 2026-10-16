@@ -1261,22 +1261,24 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final res = Map<String, dynamic>.from(rawResult);
         final balance = '${res['balance'] ?? ''}'.trim();
         if (balance.isEmpty) throw Exception('لم يتضمن رد الخادم قيمة رصيد الهاتف.');
-        final rawMobileType = '${res['mobileType'] ?? ''}'.trim();
-        final mobileType = rawMobileType == '2'
-            ? 'فوترة | شريحة'
-            : rawMobileType == '1'
-                ? 'دفع مسبق | شريحة'
-                : 'نوع الشريحة غير محدد من الخادم';
-        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
-        final hasLoan = res['loan'] == true || loanAmount > 0;
-        try { await app.refreshWalletAndReports(); } catch (_) {}
+        final billing = _serverMobileBillingType(res);
+        final mobileType = _phoneInquiryTypeLabel(res);
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        try { unawaited(app.refreshWalletAndReports().catchError((_) {})); } catch (_) {}
         if (mounted) {
           setState(() {
             ymPhoneBalance = '$balance ر.ي';
             ymPhoneType = mobileType;
             ymLoanAmount = loanAmount;
-            ymLoanStatus = hasLoan ? 'loan' : 'none';
-            balanceInquiryBanner = 'رصيد الهاتف: $balance ر.ي • $mobileType • السلفة: ${hasLoan ? '$loanAmount ر.ي' : 'لا توجد سلفة وفق رد الخادم'}';
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
+            if (billing != null) billingFilter = billing;
+            final loanText = hasLoan == true
+                ? '$loanAmount ر.ي'
+                : hasLoan == false
+                    ? 'لا توجد سلفة'
+                    : 'غير مفحوصة';
+            balanceInquiryBanner = 'رصيد الهاتف: $balance ر.ي • $mobileType • السلفة: $loanText';
           });
         }
       } else if (currentOpId == 'yemen_mobile' && type == 'offers') {
