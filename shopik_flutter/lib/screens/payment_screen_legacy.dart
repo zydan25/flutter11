@@ -2465,6 +2465,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
     var idempotencyKey = '';
     var requestSent = false;
     _paymentInProgress = true;
+    bool waitingDialogOpen = true;
+    void closeWaitingDialog() {
+      if (!waitingDialogOpen) return;
+      waitingDialogOpen = false;
+      closeWaitingDialog();
+    }
 
     showDialog<void>(
       context: context,
@@ -2513,8 +2519,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
           if (existingTx != null && _isTransactionSuccess(existingTx)) {
             await _clearActivePayment(app);
             if (!mounted) return;
-            Navigator.of(context, rootNavigator: true).pop();
-            try { await app.refreshWalletAndReports(); } catch (_) {}
+            closeWaitingDialog();
+            unawaited(app.refreshWalletAndReports().catchError((_) {}));
             _showSuccessDialog(
               res: existingTx,
               itemName: '${active['service_name'] ?? itemName}',
@@ -2529,7 +2535,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             await _clearActivePayment(app);
           } else {
             if (!mounted) return;
-            Navigator.of(context, rootNavigator: true).pop();
+            closeWaitingDialog();
             await _showPendingPaymentDialog(
               transaction: existingTx ?? active,
               itemName: itemName,
@@ -2540,7 +2546,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             return;
           }
         } else if (previousFingerprint != fingerprint) {
-          Navigator.of(context, rootNavigator: true).pop();
+          closeWaitingDialog();
           await _showPendingPaymentDialog(
             transaction: active,
             itemName: itemName,
@@ -2589,7 +2595,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       );
 
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop();
+      closeWaitingDialog();
       final status = _transactionStatus(res);
       final transactionId = '${res['id'] ?? ''}'.trim();
       await _saveActivePayment(
@@ -2632,7 +2638,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     } catch (error) {
       if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop();
+        closeWaitingDialog();
       }
       final apiRejected = error is ApiException &&
           const {400, 401, 403, 404, 405, 422}.contains(error.statusCode);
