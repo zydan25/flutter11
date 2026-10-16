@@ -1510,10 +1510,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       'include_loan', 'includeloan', 'pay_loan', 'settle_loan',
       'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount',
     };
-    return fields.whereType<Map>().any((field) {
-      final key = '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_');
-      return loanKeys.contains(key);
-    });
+    final keys = fields.whereType<Map>()
+        .map((field) => '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_'))
+        .toSet();
+    final hasAmountField = keys.any((key) => const {'amount', 'value', 'payment_amount'}.contains(key));
+    final hasLoanField = keys.any((key) => loanKeys.contains(key));
+    return hasAmountField && hasLoanField;
   }
 
   Future<void> _submitYemenMobileBalanceForPackage(_PackageItem pkg, BuildContext sheetContext) async {
@@ -1732,11 +1734,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () {
-                    if (includeLoan) {
-                      Navigator.pop(ctx);
-                      _showInquiryNotice('إضافة سداد السلفة إلى الباقة غير معرفة كقيد مستقل في الخادم. أوقفناها لتجنب اختلاف المبلغ المخصوم عن المبلغ المعروض.', isError: true);
-                      return;
-                    }
                     final catalogItemType = '${pkg.rawItem?['type'] ?? ''}'.trim();
                     if (pkg.rawItem == null || pkg.id <= 0 || catalogItemType.isEmpty) {
                       Navigator.pop(ctx);
@@ -1747,11 +1744,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     _openConfirmPaymentDialog(
                       itemName: pkg.name + (includeLoan ? ' + سداد السلفة' : ''),
                       amount: effectivePrice,
-                      serviceId: pkg.serviceId > 0 ? pkg.serviceId : resolvedService.id,
-                      serviceName: resolvedService.name,
+                      serviceId: packageServiceId,
+                      serviceName: packageServiceName,
                       itemId: pkg.id,
                       itemCode: pkg.code,
                       itemType: catalogItemType,
+                      repayLoan: includeLoan,
                     );
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
