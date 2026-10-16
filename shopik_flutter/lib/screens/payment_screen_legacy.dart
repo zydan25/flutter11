@@ -369,6 +369,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final s4 = app.getServiceId('yemen_mobile_packages_list', defaultId: 4);
         if (s3 != null) ids.add(s3);
         if (s4 != null) ids.add(s4);
+        for (final key in const [
+          'yemen_mobile_package_pay_activate',
+          'yemen_mobile_packages_pay_activate',
+        ]) {
+          final id = app.getServiceId(key);
+          if (id != null && id > 0) ids.add(id);
+        }
         ids.addAll([3, 4]);
         break;
       case 'sabafon':
@@ -514,6 +521,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Map<String, List<_PackageItem>> _getPackagesForOp(_OperatorSpec op, AppController app) {
     final sids = _getOperatorTargetServiceIds(op, app);
+    // Prefer items attached to a balance-charged purchase service when package
+    // IDs exist in both a query/catalog service and its purchase counterpart.
+    int purchasePriority(int sid) {
+      final contract = app.serviceDetailsCache[sid] ?? const <String, dynamic>{};
+      final kind = '${contract['service_kind'] ?? ''}'.trim().toLowerCase();
+      final chargeable = contract['requires_balance'] == true &&
+          (kind == 'purchase' || kind == 'action');
+      return chargeable ? 0 : 1;
+    }
+    sids.sort((a, b) {
+      final byKind = purchasePriority(a).compareTo(purchasePriority(b));
+      if (byKind != 0) return byKind;
+      return a.compareTo(b);
+    });
     final allItems = <Map<String, dynamic>>[];
     final seenItemIds = <dynamic>{};
 
