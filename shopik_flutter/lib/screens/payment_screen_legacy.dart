@@ -1680,7 +1680,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final match = _serverPurchaseContractMatchingPackage(app, pkg);
     if (match == null) return false;
     final contract = Map<String, dynamic>.from(match['contract'] as Map);
-    if ('${contract['pricing_mode'] ?? ''}'.trim().toLowerCase() != 'amount') return false;
+    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    if (!const {'amount', 'item'}.contains(pricingMode)) return false;
     final fields = contract['fields'];
     if (fields is! List) return false;
     const loanKeys = {
@@ -1692,9 +1693,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final keys = fields.whereType<Map>()
         .map((field) => '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_'))
         .toSet();
-    final hasAmountField = keys.any((key) => const {'amount', 'value', 'payment_amount'}.contains(key));
     final hasLoanField = keys.any((key) => loanKeys.contains(key));
-    return hasAmountField && hasLoanField;
+    return hasLoanField;
   }
 
   Future<void> _submitServerPackageAction(
@@ -1731,9 +1731,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
       );
       return;
     }
+    if (repayLoan &&
+        (ymLoanStatus != 'loan' ||
+            ymLoanAmount <= 0 ||
+            (ymLoanInquiryTransactionId ?? '').trim().isEmpty)) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('أعد فحص رصيد هذا الرقم من الخادم قبل إضافة السلفة؛ لا نستخدم مبلغًا أو مرجع استعلام قديمًا.', isError: true);
+      return;
+    }
     if (repayLoan && !_serverSupportsLoanAddition(pkg, app)) {
       if (sheetContext.mounted) Navigator.of(sheetContext).pop();
-      _showInquiryNotice('خدمة الشراء في الخادم لا تعلن حقولًا صريحة لدفع السلفة؛ لم نرسل مبلغًا قد يؤدي إلى خصم غير صحيح.', isError: true);
+      _showInquiryNotice('خدمة الشراء في الخادم لا تعلن حقلًا صريحًا لتسديد السلفة؛ لم نرسل الطلب لتجنب خصم غير صحيح.', isError: true);
       return;
     }
     final fields = contract['fields'];
