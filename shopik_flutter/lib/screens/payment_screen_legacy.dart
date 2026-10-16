@@ -130,6 +130,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String ymPhoneType = '---';
   String ymLoanStatus = 'unknown';
   double ymLoanAmount = 0.0;
+  String? ymLoanInquiryTransactionId;
 
   Map<String, dynamic>? fourGInquiryData;
   Map<String, dynamic>? netInquiryData;
@@ -1039,6 +1040,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ymPhoneType = '---';
           ymLoanStatus = 'unknown';
           ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
           fourGInquiryData = null;
           netInquiryData = null;
         });
@@ -1058,6 +1060,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ymPhoneType = '---';
             ymLoanStatus = 'unknown';
             ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
             fourGInquiryData = null;
             netInquiryData = null;
           }
@@ -1078,6 +1081,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ymPhoneType = '---';
           ymLoanStatus = 'unknown';
           ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
           fourGInquiryData = null;
           netInquiryData = null;
         });
@@ -1095,6 +1099,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ymPhoneType = '---';
             ymLoanStatus = 'unknown';
             ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
             fourGInquiryData = null;
             netInquiryData = null;
           });
@@ -1318,6 +1323,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final rawResult = tx['result'];
         if (rawResult is! Map || rawResult.isEmpty) throw Exception('اكتمل الطلب دون تفاصيل رصيد قابلة للعرض من الخادم.');
         final res = Map<String, dynamic>.from(rawResult);
+        final inquiryId = '${tx['id'] ?? tx['transaction_id'] ?? ''}'.trim();
         final balance = '${res['balance'] ?? ''}'.trim();
         if (balance.isEmpty) throw Exception('لم يتضمن رد الخادم قيمة رصيد الهاتف.');
         final billing = _serverMobileBillingType(res);
@@ -1330,6 +1336,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ymPhoneBalance = '$balance ر.ي';
             ymPhoneType = mobileType;
             ymLoanAmount = loanAmount;
+            ymLoanInquiryTransactionId = inquiryId.isEmpty ? null : inquiryId;
             ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
             if (billing != null) billingFilter = billing;
             final loanText = hasLoan == true
