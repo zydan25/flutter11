@@ -1433,13 +1433,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
         if (rawOffers is! List) {
           _showInquiryNotice('وصل رد الخادم، لكنه لم يتضمن قائمة الباقات المتوقعة. تحقق من إعدادات خدمة الباقات.', isError: true);
         }
-      ling;
-            if (liveBalance != null && liveBalance!.isNotEmpty) ymPhoneBalance = '$liveBalance ر.ي';
-          });
-        }
-        if (rawOffers is! List) {
-          _showInquiryNotice('وصل رد الخادم، لكنه لم يتضمن قائمة الباقات المتوقعة. تحقق من إعدادات خدمة الباقات.', isError: true);
-        }
       } else if (currentOpId == 'yemen4g') {
         final tx = await app.api.queryYemen4g(normalizedPhone);
         if (!_isTransactionSuccess(tx)) {
@@ -1510,11 +1503,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
             ymPhoneType = _phoneInquiryTypeLabel(res);
             if (billing != null) billingFilter = billing;
             final balance = '${res['balance'] ?? ''}'.trim();
-            if (balance.isNotEmpty) ymPhoneBalance = '$balance ر.ي';
-          });
-        }
-      }
-      final balance = '${res['balance'] ?? ''}'.trim();
             if (balance.isNotEmpty) ymPhoneBalance = '$balance ر.ي';
           });
         }
