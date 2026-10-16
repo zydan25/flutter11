@@ -350,11 +350,20 @@ class AppController extends ChangeNotifier {
     try { final rawStatement = await api.walletStatement(); final value = rawStatement['statement']; statement = value is List ? value.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList() : []; } catch (_) {}
     try {
       final rawOps = await api.serviceReports();
-      // Filter strictly to non-inquiry operations (exclude check, inquiry, query, loan inquiry)
+      // Separate inquiries from billable actions. A loan repayment is a payment,
+      // so do not exclude it merely because its name contains "سلفة".
       operations = rawOps.where((op) {
-        final text = '${op['service'] ?? op['packageName'] ?? op['item_name'] ?? op['notes'] ?? op['type'] ?? ''}'.toLowerCase();
-        final isExcluded = ['inquiry', 'check', 'query', 'استعلام', 'فحص', 'سلفة', 'معاينة'].any((w) => text.contains(w));
-        return !isExcluded;
+        final kind = '${op['service_kind'] ?? op['serviceKind'] ?? ''}'.trim().toLowerCase();
+        final text = [
+          op['service'], op['service_code'], op['service_name'], op['packageName'],
+          op['item_name'], op['notes'], op['type'], op['action'],
+        ].map((value) => '${value ?? ''}').join(' ').toLowerCase();
+        final isInquiry = const {'query', 'catalog'}.contains(kind) ||
+            const [
+              'inquiry', 'query', 'استعلام', 'فحص', 'معاينة',
+              'loan_check', 'sulfa_check', 'check_balance', 'check_offers',
+            ].any((word) => text.contains(word));
+        return !isInquiry;
       }).toList();
     } catch (_) {}
     notifyListeners();
