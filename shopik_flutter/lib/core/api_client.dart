@@ -85,7 +85,31 @@ class ApiClient {
       return Map<String,dynamic>.from(await get('/services/services/$id/'));
     }
   }
-  Future<Map<String,dynamic>> serviceRequest({required int serviceId,required Map<String,dynamic> payload,String? itemType,int? itemId,String? idempotencyKey}) async {final key=idempotencyKey??'${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1<<30)}';return Map<String,dynamic>.from(await post('/v2/services/requests/',{'service_id':serviceId,'payload':payload,if(itemType!=null)'item_type':itemType,if(itemId!=null)'item_id':itemId},idempotencyKey:key));}
+  Future<Map<String,dynamic>> serviceRequest({
+    required int serviceId,
+    required Map<String,dynamic> payload,
+    String? itemType,
+    int? itemId,
+    String? idempotencyKey,
+    bool repayLoan = false,
+    String? loanInquiryTransactionId,
+  }) async {
+    final key = idempotencyKey ??
+        '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 30)}';
+    return Map<String, dynamic>.from(await post(
+      '/v2/services/requests/',
+      {
+        'service_id': serviceId,
+        'payload': payload,
+        if (itemType != null) 'item_type': itemType,
+        if (itemId != null) 'item_id': itemId,
+        if (repayLoan) 'repay_loan': true,
+        if (repayLoan && loanInquiryTransactionId != null && loanInquiryTransactionId.isNotEmpty)
+          'loan_inquiry_id': loanInquiryTransactionId,
+      },
+      idempotencyKey: key,
+    ));
+  }
   Future<Map<String,dynamic>> serviceTransaction(String id) async =>
       Map<String,dynamic>.from(await get('/v2/services/requests/$id/'));
 
@@ -157,6 +181,8 @@ class ApiClient {
     String? itemType,
     int? itemId,
     String? idempotencyKey,
+    bool repayLoan = false,
+    String? loanInquiryTransactionId,
     Duration maxWait = const Duration(seconds: 40),
     Duration pollInterval = const Duration(seconds: 2),
     void Function(Map<String,dynamic>)? onProgress,
@@ -169,6 +195,8 @@ class ApiClient {
       itemType: itemType,
       itemId: itemId,
       idempotencyKey: key,
+      repayLoan: repayLoan,
+      loanInquiryTransactionId: loanInquiryTransactionId,
     );
 
     final id = '${initial['id'] ?? ''}'.trim();
