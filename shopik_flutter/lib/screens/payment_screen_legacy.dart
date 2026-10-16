@@ -2469,7 +2469,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
     void closeWaitingDialog() {
       if (!waitingDialogOpen) return;
       waitingDialogOpen = false;
-      closeWaitingDialog();
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
     }
 
     showDialog<void>(
@@ -2609,7 +2611,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         targetPhone: targetPhone,
         amount: amount,
       );
-      try { await app.refreshWalletAndReports(); } catch (_) {}
+      unawaited(app.refreshWalletAndReports().catchError((_) {}));
 
       if (_isTransactionSuccess(res) && transactionId.isNotEmpty) {
         await _clearActivePayment(app);
