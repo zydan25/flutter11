@@ -350,11 +350,20 @@ class AppController extends ChangeNotifier {
     try { final rawStatement = await api.walletStatement(); final value = rawStatement['statement']; statement = value is List ? value.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList() : []; } catch (_) {}
     try {
       final rawOps = await api.serviceReports();
-      // Filter strictly to non-inquiry operations (exclude check, inquiry, query, loan inquiry)
+      // Separate inquiries from billable actions. A loan repayment is a payment,
+      // so do not exclude it merely because its name contains "سلفة".
       operations = rawOps.where((op) {
-        final text = '${op['service'] ?? op['packageName'] ?? op['item_name'] ?? op['notes'] ?? op['type'] ?? ''}'.toLowerCase();
-        final isExcluded = ['inquiry', 'check', 'query', 'استعلام', 'فحص', 'سلفة', 'معاينة'].any((w) => text.contains(w));
-        return !isExcluded;
+        final kind = '${op['service_kind'] ?? op['serviceKind'] ?? ''}'.trim().toLowerCase();
+        final text = [
+          op['service'], op['service_code'], op['service_name'], op['packageName'],
+          op['item_name'], op['notes'], op['type'], op['action'],
+        ].map((value) => '${value ?? ''}').join(' ').toLowerCase();
+        final isInquiry = const {'query', 'catalog'}.contains(kind) ||
+            const [
+              'inquiry', 'query', 'استعلام', 'فحص', 'معاينة',
+              'loan_check', 'sulfa_check', 'check_balance', 'check_offers',
+            ].any((word) => text.contains(word));
+        return !isInquiry;
       }).toList();
     } catch (_) {}
     notifyListeners();
@@ -422,7 +431,7 @@ class AppController extends ChangeNotifier {
 
     final targetIds = <int>{1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 60, 61};
     final settingKeys = [
-      'bagatmobileget', 'yemen_mobile_packages_list', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
+      'bagatmobileget', 'yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_pay_activate', 'yemen_mobile_package_activate_only', 'yemen_mobile_activate_package', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
       'bagatsabafonget', 'sabafon_packages_legacy', 'sabafon_north_packages_list', 'featsabafon', 'sabafon_north_denominations_list',
       'bagatyouget', 'bagatyou', 'you_packages_list', 'featyou', 'you_denominations_list',
       'bagatwayget', 'wai_packages_list', 'featway', 'wai_denominations_list',
@@ -452,7 +461,7 @@ class AppController extends ChangeNotifier {
     final idsToPreload = <int>{};
     // Extract configured IDs or default to primary telecom service IDs
     final keys = [
-      'bagatmobileget', 'yemen_mobile_packages_list', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
+      'bagatmobileget', 'yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_pay_activate', 'yemen_mobile_package_activate_only', 'yemen_mobile_activate_package', 'featmobile', 'yemen_mobile_denominations_list', 'yemen_mobile_recharge',
       'bagatsabafonget', 'sabafon_packages_legacy', 'sabafon_north_packages_list', 'featsabafon', 'sabafon_north_denominations_list', 'sabafon_instant_recharge',
       'bagatyouget', 'bagatyou', 'you_packages_list', 'featyou', 'you_denominations_list', 'you_instant_recharge_legacy',
       'bagatwayget', 'wai_packages_list', 'featway', 'wai_denominations_list',
@@ -569,13 +578,25 @@ class AppController extends ChangeNotifier {
     return catalogServices.where((s) { final haystack = '${s['code'] ?? ''} ${s['name'] ?? ''} ${s['description'] ?? ''}'.toLowerCase(); return needles.any((k) => haystack.contains(k.toLowerCase())); }).toList();
   }
 
-  Future<Map<String, dynamic>> requestService({required int serviceId, required Map<String, dynamic> payload, String? itemType, int? itemId, String? idempotencyKey}) async {
-    final tx = await api.serviceRequest(serviceId: serviceId, payload: payload, itemType: itemType, itemId: itemId, idempotencyKey: idempotencyKey);
-    var latest = tx; final id = tx['id']?.toString();
-    if (id != null && ['accepted', 'queued', 'pending', 'pending_provider', 'processing'].contains('${tx['status']}')) {
-      for (var i = 0; i < 20; i++) { await Future.delayed(const Duration(milliseconds: 1200)); latest = await api.serviceTransaction(id); if (['success', 'failed', 'refunded', 'manual_review'].contains('${latest['status']}')) break; }
-    }
-    return latest;
+  Future<Map<String, dynamic>> requestService({
+    required int serviceId,
+    required Map<String, dynamic> payload,
+    String? itemType,
+    int? itemId,
+    String? idempotencyKey,
+    Duration maxWait = const Duration(seconds: 40),
+    void Function(Map<String, dynamic>)? onProgress,
+  }) {
+    return api.submitAndPollServiceRequest(
+      serviceId: serviceId,
+      payload: payload,
+      itemType: itemType,
+      itemId: itemId,
+      idempotencyKey: idempotencyKey,
+      maxWait: maxWait,
+      pollInterval: const Duration(seconds: 2),
+      onProgress: onProgress,
+    );
   }
   Future<Map<String, dynamic>> recipientLookup(String phone) => api.giftLookup(phone);
   @override void dispose() { _poller?.cancel(); super.dispose(); }

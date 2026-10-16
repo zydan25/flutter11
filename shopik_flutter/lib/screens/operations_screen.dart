@@ -1,8 +1,102 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
+
+
+String _transactionPhone(Map<String, dynamic> item) {
+  final payload = item['payload'] is Map
+      ? Map<String, dynamic>.from(item['payload'] as Map)
+      : <String, dynamic>{};
+  for (final key in const [
+    'phone', 'mobile', 'mobile_number', 'phone_number',
+    'subscriber_number', 'account_number', 'msisdn',
+  ]) {
+    final value = item[key] ?? payload[key];
+    if (value != null && '${value}'.trim().isNotEmpty) return '${value}'.trim();
+  }
+  return '';
+}
+
+dynamic _transactionResponse(Map<String, dynamic> item) =>
+    item['provider_response'] ?? item['server_response'] ?? item['raw_response'] ?? item['result'] ?? item['response'];
+
+String _transactionResponseText(Map<String, dynamic> item) {
+  final response = _transactionResponse(item);
+  if (response == null) return '';
+  if (response is String) return response;
+  try {
+    return const JsonEncoder.withIndent('  ').convert(response);
+  } catch (_) {
+    return '${response}';
+  }
+}
+
+String _transactionServiceName(Map<String, dynamic> item, [AppController? app]) {
+  final code = '${item['service_code'] ?? item['service'] ?? item['service_key'] ?? ''}'.trim();
+  for (final key in const ['service_name', 'service_display_name', 'display_name']) {
+    final name = '${item[key] ?? ''}'.trim();
+    if (name.isNotEmpty && name.toLowerCase() != code.toLowerCase()) return name;
+  }
+  if (app != null && code.isNotEmpty) {
+    for (final setting in app.serviceSettingsRaw) {
+      final nested = setting['service'] is Map
+          ? Map<String, dynamic>.from(setting['service'] as Map)
+          : <String, dynamic>{};
+      final keys = [
+        '${setting['key'] ?? ''}',
+        '${setting['service_code'] ?? ''}',
+        '${nested['code'] ?? ''}',
+        '${nested['slug'] ?? ''}',
+      ].map((v) => v.trim().toLowerCase()).where((v) => v.isNotEmpty);
+      if (keys.contains(code.toLowerCase())) {
+        final name = '${nested['name'] ?? setting['name'] ?? ''}'.trim();
+        if (name.isNotEmpty) return name;
+      }
+    }
+    final id = int.tryParse('${item['service_id'] ?? ''}');
+    for (final entry in app.serviceDetailsCache.entries) {
+      final detail = entry.value;
+      if ((id != null && entry.key == id) ||
+          '${detail['code'] ?? ''}'.trim().toLowerCase() == code.toLowerCase() ||
+          '${detail['slug'] ?? ''}'.trim().toLowerCase() == code.toLowerCase()) {
+        final name = '${detail['name'] ?? ''}'.trim();
+        if (name.isNotEmpty) return name;
+      }
+    }
+  }
+  switch (code.toLowerCase()) {
+    case 'yem-balance':
+    case 'yemen_mobile_recharge':
+    case 'yemen-mobile-recharge':
+      return 'تسديد رصيد يمن موبايل';
+    case 'yemen_mobile_balance':
+    case 'yem-balance-inquiry':
+      return 'استعلام رصيد يمن موبايل';
+    case 'yemen_mobile_offers':
+    case 'yem-offers':
+      return 'استعلام باقات يمن موبايل';
+    case 'bagatmobileget':
+      return 'باقات يمن موبايل';
+  }
+  final fallback = '${item['packageName'] ?? item['item_name'] ?? item['title'] ?? item['name'] ?? code}'.trim();
+  return fallback.isEmpty ? 'خدمة غير محددة' : fallback;
+}
+
+bool _isServiceInquiry(Map<String, dynamic> item) {
+  final kind = '${item['service_kind'] ?? item['serviceKind'] ?? ''}'.trim().toLowerCase();
+  if (kind == 'query' || kind == 'catalog') return true;
+  final code = '${item['service_code'] ?? item['service'] ?? item['service_key'] ?? ''}'.trim().toLowerCase();
+  final label = '${item['service_name'] ?? item['display_name'] ?? item['type'] ?? item['action'] ?? ''}'.trim().toLowerCase();
+  final text = '$code $label';
+  return const [
+    'inquiry', 'query', 'catalog', 'استعلام', 'فحص السلفة', 'loan_check',
+    'sulfa_check', 'check_balance', 'check_offers', 'packages_list',
+  ].any(text.contains);
+}
 
 class OperationsScreen extends StatefulWidget {
   const OperationsScreen({super.key, this.onBack});
@@ -13,6 +107,41 @@ class OperationsScreen extends StatefulWidget {
 }
 
 class _OperationsScreenState extends State<OperationsScreen> {
+  Widget _buildSectionChoice({
+    required String label,
+    required int count,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF8B1D3B) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? const Color(0xFF8B1D3B) : const Color(0xFFE2E8F0)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: selected ? Colors.white : const Color(0xFF334155)))),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: selected ? Colors.white.withOpacity(0.18) : const Color(0xFFE2E8F0),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text('$count', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: selected ? Colors.white : const Color(0xFF334155))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   String _selectedAccount = 'الحساب الرئيسي';
   String _selectedBranch = 'اختر النقطة , الفرع';
   DateTime _selectedDate = DateTime(2026, 9, 9);
@@ -21,8 +150,11 @@ class _OperationsScreenState extends State<OperationsScreen> {
   bool _showSearchField = false;
   final TextEditingController _searchCtrl = TextEditingController();
 
-  // Local state for operations loaded from server
+  // Payment records and provider inquiries are shown in separate sections.
   List<Map<String, dynamic>> _operations = [];
+  List<Map<String, dynamic>> _inquiries = [];
+  String _selectedSection = 'operations';
+  bool _sortByPhone = false;
 
   @override
   void initState() {
@@ -37,105 +169,129 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   Future<void> _loadOperations() async {
-    setState(() => _loading = true);
-    try {
-      final app = context.read<AppController>();
-      final serverOps = await app.api.serviceRequests();
-      if (serverOps.isNotEmpty) {
-        setState(() {
-          _operations = serverOps;
-          _loading = false;
-        });
-        return;
-      }
-    } catch (_) {}
-
+    if (mounted) setState(() => _loading = true);
     final app = context.read<AppController>();
+    List<Map<String, dynamic>> records = [];
+    try {
+      records = await app.api.serviceRequests();
+      if (records.isEmpty) records = await app.api.serviceReports();
+    } catch (_) {}
+    if (records.isEmpty) records = List<Map<String, dynamic>>.from(app.operations);
+
+    final inquiries = records.where(_isServiceInquiry).toList();
+    final payments = records.where((item) => !_isServiceInquiry(item)).toList();
+    if (!mounted) return;
     setState(() {
-      _operations = List.from(app.operations);
+      _operations = payments;
+      _inquiries = inquiries;
       _loading = false;
     });
   }
 
   Future<void> _checkOperation(Map<String, dynamic> op) async {
-    final opId = '${op['id'] ?? ''}'.trim();
-    showDialog(
+    final operationId = '${op['id'] ?? ''}'.trim();
+    if (operationId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFB45309),
+          content: Text('لا يوجد رقم مرجع للعملية يمكن فحصه من الخادم.'),
+        ),
+      );
+      return;
+    }
+
+    var progressDialogOpen = true;
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              CircularProgressIndicator(color: Color(0xFF8B1D3B)),
-              SizedBox(height: 12),
-              Text('جاري فحص حالة العملية من المزود...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ],
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 12),
+                Text('جاري فحص حالة العملية من الخادم...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
           ),
         ),
       ),
     );
 
+    void closeProgressDialog() {
+      if (!progressDialogOpen || !mounted) return;
+      progressDialogOpen = false;
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
     try {
       final app = context.read<AppController>();
-      if (opId.isNotEmpty) {
-        final result = await app.api.checkOperationStatus(opId);
-        if (mounted) Navigator.pop(context);
-        
-        setState(() {
-          op['status'] = 'جاهز';
-          op['notes'] = result['notes'] ?? result['message'] ?? 'تم تجهيز العملية من نظام المزود تزامن مباشر! الرد: تصحيح الجاهزية بعد التأكد';
-        });
+      var result = await app.api.checkOperationStatus(operationId);
+      var status = '${result['status'] ?? ''}'.trim().toLowerCase();
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF059669),
-              behavior: SnackBarBehavior.floating,
-              content: Row(
-                children: const [
-                  Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text('العملية جاهز: تم التأكد من تنفيذها بنجاح لدى المزود', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-      } else {
-        if (mounted) Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: Color(0xFF059669),
-              content: Text('العملية جاهزة ومكتملة بالفعل'),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        setState(() => op['status'] = 'جاهز');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF059669),
-            content: Text('العملية جاهز: الرد تصحيح الجاهزية بعد الفحص المباشر'),
-          ),
+      // A provider check can report that the transaction is still processing.
+      // Continue checking the existing UUID; never submit a second payment.
+      if (status.isEmpty ||
+          const {'accepted', 'queued', 'pending', 'pending_provider', 'processing', 'manual_review'}.contains(status)) {
+        result = await app.api.waitForServiceTransaction(
+          operationId,
+          initial: result,
+          maxWait: const Duration(seconds: 30),
+          pollInterval: const Duration(seconds: 2),
         );
+        status = '${result['status'] ?? ''}'.trim().toLowerCase();
       }
+
+      closeProgressDialog();
+      if (!mounted) return;
+
+      final note = '${result['error_message'] ?? result['message'] ?? result['detail'] ?? ''}'.trim();
+      setState(() {
+        op['status'] = status.isEmpty ? 'unknown' : status;
+        if (note.isNotEmpty) op['notes'] = note;
+        op['last_checked_at'] = DateTime.now().toIso8601String();
+      });
+
+      final success = const {'success', 'completed', 'done', 'executed'}.contains(status);
+      final failure = const {'failed', 'error', 'rejected', 'refunded'}.contains(status);
+      final message = success
+          ? 'أكد الخادم نجاح العملية.'
+          : status == 'refunded'
+              ? 'أفاد الخادم أن الرصيد أُعيد.'
+              : const {'failed', 'error', 'rejected'}.contains(status)
+                  ? 'أفاد الخادم أن العملية لم تنجح.'
+                  : status == 'manual_review'
+                      ? 'العملية تحتاج إلى مراجعة تشغيلية. لا تكرر السداد.'
+                      : 'لم تصل نتيجة نهائية بعد؛ الحالة الحالية: ${status.isEmpty ? 'غير معروفة' : status}.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: success
+              ? const Color(0xFF059669)
+              : failure
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFFB45309),
+          behavior: SnackBarBehavior.floating,
+          content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+        ),
+      );
+    } catch (e) {
+      closeProgressDialog();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFB45309),
+          behavior: SnackBarBehavior.floating,
+          content: Text('تعذر التحقق من حالة العملية؛ لم نغيرها إلى ناجحة: $e'),
+        ),
+      );
     }
   }
 
-  void _deleteOperation(int index) {
+  void _deleteOperation(Map<String, dynamic> operation) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -147,12 +303,17 @@ class _OperationsScreenState extends State<OperationsScreen> {
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
-              final op = _operations[index];
-              final id = '${op['id'] ?? ''}';
-              if (id.isNotEmpty) {
+              final id = '${operation['id'] ?? ''}';
+              if (id.isNotEmpty && _selectedSection == 'operations') {
                 context.read<AppController>().api.deleteServiceRequest(id);
               }
-              setState(() => _operations.removeAt(index));
+              setState(() {
+                final list = _selectedSection == 'inquiries' ? _inquiries : _operations;
+                final index = list.indexWhere((item) =>
+                    identical(item, operation) ||
+                    ('${item['id'] ?? ''}'.isNotEmpty && item['id'] == operation['id']));
+                if (index >= 0) list.removeAt(index);
+              });
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('تم حذف العملية من العرض')),
               );
@@ -166,6 +327,22 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   void _printReceipt(Map<String, dynamic> op) {
+    final rawReceiptId = '${op['id'] ?? ''}'.trim();
+    final receiptId = rawReceiptId.isEmpty
+        ? 'غير متوفر'
+        : rawReceiptId.length > 8
+            ? rawReceiptId.substring(0, 8)
+            : rawReceiptId;
+    final app = context.read<AppController>();
+    final status = '${op['status'] ?? 'unknown'}'.trim().toLowerCase();
+    final statusLabel = const {'success', 'completed', 'done', 'executed'}.contains(status)
+        ? 'ناجح'
+        : const {'failed', 'error', 'rejected'}.contains(status)
+            ? 'فاشل'
+            : status == 'refunded'
+                ? 'أُعيد الرصيد'
+                : 'غير محسوم / قيد التنفيذ';
+    final response = _transactionResponseText(op);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -195,13 +372,14 @@ class _OperationsScreenState extends State<OperationsScreen> {
                 children: [
                   const Text('شبكة شبيك الإلكترونية المعتمدة', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Color(0xFF8B1D3B))),
                   const SizedBox(height: 4),
-                  Text('رقم السند: #${op['id']?.toString().substring(0, 8) ?? '883921'}', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                  Text('رقم السند: #$receiptId', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
                   const Divider(height: 20),
-                  _receiptRow('الخدمة:', '${op['service'] ?? 'سداد إلكتروني'}'),
-                  _receiptRow('رقم الهاتف:', '${op['phone'] ?? '---'}'),
+                  _receiptRow('الخدمة:', _transactionServiceName(op, app)),
+                  _receiptRow('رقم الهاتف:', _transactionPhone(op).isEmpty ? '---' : _transactionPhone(op)),
                   _receiptRow('المبلغ:', '${op['amount']} ريال يمني'),
-                  _receiptRow('الحالة:', 'جاهز ومكتمل ✅'),
-                  _receiptRow('التاريخ:', '${op['created_at'] ?? '2026-09-09'}'),
+                  _receiptRow('الحالة:', statusLabel),
+                  _receiptRow('التاريخ:', '${op['created_at'] ?? 'غير متوفر'}'),
+                  if (response.isNotEmpty) _receiptRow('رد الخادم:', response),
                 ],
               ),
             ),
@@ -284,12 +462,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredOps = _searchQuery.isEmpty
-        ? _operations
-        : _operations.where((op) {
-            final text = '${op['service']} ${op['phone']} ${op['amount']} ${op['id']}'.toLowerCase();
-            return text.contains(_searchQuery.toLowerCase());
-          }).toList();
+    final app = context.read<AppController>();
+    final activeRecords = _selectedSection == 'inquiries' ? _inquiries : _operations;
+    final query = _searchQuery.toLowerCase();
+    final filteredOps = activeRecords.where((op) {
+      final searchable = [
+        _transactionServiceName(op, app),
+        _transactionPhone(op),
+        '${op['amount'] ?? ''}',
+        '${op['id'] ?? ''}',
+        '${op['status'] ?? ''}',
+        _transactionResponseText(op),
+      ].join(' ').toLowerCase();
+      return query.isEmpty || searchable.contains(query);
+    }).toList();
+    if (_sortByPhone) {
+      filteredOps.sort((a, b) => _transactionPhone(a).compareTo(_transactionPhone(b)));
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -308,18 +497,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
                 autofocus: true,
                 style: const TextStyle(color: Colors.white, fontSize: 13),
                 decoration: const InputDecoration(
-                  hintText: 'بحث في العمليات...',
+                  hintText: 'بحث بالرقم أو الخدمة أو رد الخادم...',
                   hintStyle: TextStyle(color: Colors.white70, fontSize: 13),
                   border: InputBorder.none,
                 ),
                 onChanged: (val) => setState(() => _searchQuery = val.trim()),
               )
-            : const Text(
-                'العمليات',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
+            : Text(
+                _selectedSection == 'inquiries' ? 'الاستعلامات' : 'العمليات',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
               ),
         centerTitle: true,
         actions: [
+          IconButton(
+            tooltip: _sortByPhone ? 'إلغاء الفرز حسب رقم الهاتف' : 'فرز حسب رقم الهاتف',
+            icon: Icon(_sortByPhone ? Icons.sort_by_alpha_rounded : Icons.phone_iphone_rounded, color: Colors.white),
+            onPressed: () => setState(() => _sortByPhone = !_sortByPhone),
+          ),
           IconButton(
             icon: Icon(_showSearchField ? Icons.close_rounded : Icons.search_rounded, color: Colors.white),
             onPressed: () {
@@ -340,6 +534,31 @@ class _OperationsScreenState extends State<OperationsScreen> {
       ),
       body: Column(
         children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildSectionChoice(
+                    label: 'العمليات',
+                    count: _operations.length,
+                    selected: _selectedSection == 'operations',
+                    onTap: () => setState(() => _selectedSection = 'operations'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildSectionChoice(
+                    label: 'الاستعلامات',
+                    count: _inquiries.length,
+                    selected: _selectedSection == 'inquiries',
+                    onTap: () => setState(() => _selectedSection = 'inquiries'),
+                  ),
+                ),
+              ],
+            ),
+          ),
           // Filter Row 1: Dropdowns (Matching Screenshot 3)
           Container(
             color: Colors.white,
@@ -456,10 +675,13 @@ class _OperationsScreenState extends State<OperationsScreen> {
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.inbox_rounded, size: 48, color: Color(0xFF94A3B8)),
-                            SizedBox(height: 8),
-                            Text('لا توجد عمليات مسجلة لهذا التاريخ', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
+                          children: [
+                            const Icon(Icons.inbox_rounded, size: 48, color: Color(0xFF94A3B8)),
+                            const SizedBox(height: 8),
+                            Text(
+                              _selectedSection == 'inquiries' ? 'لا توجد استعلامات مسجلة' : 'لا توجد عمليات مسجلة',
+                              style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
+                            ),
                           ],
                         ),
                       )
@@ -483,11 +705,49 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   Widget _buildOperationCard(Map<String, dynamic> op, int index) {
-    final service = '${op['service'] ?? op['packageName'] ?? 'yem-balance'}';
-    final type = '${op['type'] ?? 'دفع مسبق'}';
-    final phone = '${op['phone'] ?? op['mobile'] ?? ''}'.trim();
+    final app = context.read<AppController>();
+    final service = _transactionServiceName(op, app);
+    final type = '${op['type'] ?? op['item_name'] ?? op['packageName'] ?? op['service_kind'] ?? 'عملية خدمة'}';
+    final phone = _transactionPhone(op);
     final amount = double.tryParse('${op['amount'] ?? 0}') ?? 0;
-    final isReady = '${op['status']}'.contains('جاهز') || '${op['status']}'.toLowerCase() == 'success' || '${op['status']}'.toLowerCase() == 'completed';
+    final serverResponse = _transactionResponseText(op);
+    final statusValue = '${op['status'] ?? 'unknown'}'.trim().toLowerCase();
+    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(statusValue);
+    final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(statusValue);
+    final isReview = statusValue == 'manual_review';
+    final statusLabel = isReady
+        ? 'ناجح'
+        : statusValue == 'refunded'
+            ? 'أُعيد الرصيد'
+            : isFailure
+                ? 'فشل'
+                : isReview
+                    ? 'مراجعة'
+                    : statusValue == 'accepted' || statusValue == 'queued' || statusValue == 'processing' || statusValue == 'pending_provider'
+                        ? 'قيد التنفيذ'
+                        : 'غير محسومة';
+    final statusColor = isReady
+        ? const Color(0xFF059669)
+        : isFailure
+            ? const Color(0xFFDC2626)
+            : const Color(0xFFB45309);
+    final statusBg = isReady
+        ? const Color(0xFFE8F8F0)
+        : isFailure
+            ? const Color(0xFFFEF2F2)
+            : const Color(0xFFFFFBEB);
+    final statusBorder = isReady
+        ? const Color(0xFFA7F3D0)
+        : isFailure
+            ? const Color(0xFFFECACA)
+            : const Color(0xFFFDE68A);
+    final statusIcon = isReady
+        ? Icons.check_circle_rounded
+        : isFailure
+            ? Icons.cancel_rounded
+            : isReview
+                ? Icons.support_agent_rounded
+                : Icons.access_time_rounded;
 
     return Container(
       decoration: BoxDecoration(
@@ -562,36 +822,35 @@ class _OperationsScreenState extends State<OperationsScreen> {
                           const Text('سعر العملية:', style: TextStyle(fontSize: 11, color: Color(0xFFB91C1C), fontWeight: FontWeight.bold)),
                         ],
                       ),
+                      if (serverResponse.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'رد الخادم: ${serverResponse.replaceAll('\n', ' ')}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 10, height: 1.35, color: Color(0xFF475569)),
+                        ),
+                      ],
                     ],
                   ),
                 ),
 
-                // Left side: Status badge (جاهز with checkmark)
+                // A success badge requires an explicit success status from the backend.
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isReady ? const Color(0xFFE8F8F0) : const Color(0xFFFFFBEB),
+                    color: statusBg,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isReady ? const Color(0xFFA7F3D0) : const Color(0xFFFDE68A),
-                    ),
+                    border: Border.all(color: statusBorder),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        isReady ? Icons.check_circle_rounded : Icons.access_time_rounded,
-                        color: isReady ? const Color(0xFF059669) : const Color(0xFFD97706),
-                        size: 16,
-                      ),
+                      Icon(statusIcon, color: statusColor, size: 16),
                       const SizedBox(width: 4),
                       Text(
-                        isReady ? 'جاهز' : 'قيد المعالجة',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: isReady ? const Color(0xFF059669) : const Color(0xFFD97706),
-                        ),
+                        statusLabel,
+                        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: statusColor),
                       ),
                     ],
                   ),
@@ -613,7 +872,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   label: 'حذف',
                   icon: Icons.delete_outline_rounded,
                   color: const Color(0xFFDC2626),
-                  onTap: () => _deleteOperation(index),
+                  onTap: () => _deleteOperation(op),
                 ),
                 // 2. تفاصيل
                 _buildActionBtn(
@@ -699,20 +958,46 @@ class OperationDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final opId = '${operation['id'] ?? '32ce0ab6-67d6-481b-a4fc-70ec30ba75a3'}';
+    final rawOpId = '${operation['id'] ?? ''}'.trim();
+    final opId = rawOpId.isEmpty ? 'غير متوفر' : rawOpId;
     final shortTitle = opId.length > 12 ? '${opId.substring(0, 12)}...' : opId;
-    final service = '${operation['service'] ?? operation['packageName'] ?? 'freefire'}';
-    final type = '${operation['type'] ?? 'دفع مسبق'}';
-    final phone = '${operation['phone'] ?? operation['mobile'] ?? ''}'.trim();
-    final amount = double.tryParse('${operation['amount'] ?? 1200}') ?? 1200.0;
-    final createdAt = '${operation['created_at'] ?? '2026-09-10T12:19:56.659877+00:00'}';
-    final completedAt = '${operation['completed_at'] ?? '2026-09-10T12:20:31.589978+00:00'}';
-    final readiness = '${operation['status'] ?? 'جاهز'}';
-    final stateCode = '${operation['state_code'] ?? operation['state'] ?? 'refunded'}';
-    final chipCode = '${operation['chip_code'] ?? '7bc188ad33bec2c1'}';
-    final notes = '${operation['notes'] ?? 'تم تجهيز العملية من نظام المزود تزامن مباشر! الرد: تصحيح الجاهزية بعد التأكد'}';
-    final cancelReason = '${operation['cancel_reason'] ?? '---'}';
-    final transferNumber = '${operation['transfer_number'] ?? '---'}';
+    final app = context.read<AppController>();
+    final service = _transactionServiceName(operation, app);
+    final type = '${operation['type'] ?? operation['item_name'] ?? operation['packageName'] ?? operation['service_kind'] ?? 'غير محدد'}';
+    final phone = _transactionPhone(operation);
+    final serverResponse = _transactionResponseText(operation);
+    final amount = double.tryParse('${operation['amount'] ?? ''}') ?? 0.0;
+    final createdAt = '${operation['created_at'] ?? 'غير متوفر'}';
+    final completedAt = '${operation['completed_at'] ?? 'لم تكتمل بعد'}';
+    final readiness = '${operation['status'] ?? 'unknown'}'.trim();
+    final normalizedStatus = readiness.toLowerCase();
+    final isReady = const {'success', 'completed', 'done', 'executed'}.contains(normalizedStatus);
+    final isFailure = const {'failed', 'error', 'rejected', 'refunded'}.contains(normalizedStatus);
+    final isReview = normalizedStatus == 'manual_review';
+    final readinessLabel = isReady
+        ? 'تم تأكيد النجاح'
+        : isFailure
+            ? (normalizedStatus == 'refunded' ? 'أُعيد الرصيد' : 'فشل')
+            : isReview
+                ? 'قيد المراجعة'
+                : 'تم الإرسال / بانتظار النتيجة';
+    final readinessColor = isReady
+        ? const Color(0xFF2E7D32)
+        : isFailure
+            ? const Color(0xFFC62828)
+            : const Color(0xFFB45309);
+    final readinessIcon = isReady
+        ? Icons.check_circle_rounded
+        : isFailure
+            ? Icons.cancel_rounded
+            : isReview
+                ? Icons.support_agent_rounded
+                : Icons.hourglass_top_rounded;
+    final stateCode = '${operation['state_code'] ?? operation['state'] ?? 'غير متوفر'}';
+    final chipCode = '${operation['chip_code'] ?? 'غير متوفر'}';
+    final notes = '${operation['notes'] ?? operation['message'] ?? 'لا توجد ملاحظات من الخادم'}';
+    final cancelReason = '${operation['cancel_reason'] ?? 'غير متوفر'}';
+    final transferNumber = '${operation['transfer_number'] ?? 'غير متوفر'}';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -733,7 +1018,7 @@ class OperationDetailScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.share_rounded, color: Colors.white, size: 20),
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nالمبلغ: $amount ر.ي\nالحالة: جاهز'));
+              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nرقم الهاتف: $phone\nالمبلغ: $amount ر.ي\nالحالة: $readinessLabel\nرد الخادم: $serverResponse'));
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('تم نسخ تفاصيل العملية للمشاركة')),
               );
@@ -744,11 +1029,11 @@ class OperationDetailScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // 1. Big Green Banner: العملية جاهز (Matching Screenshot 4)
+          // Report the status received from the backend; never synthesize success.
           Container(
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
             decoration: BoxDecoration(
-              color: const Color(0xFF2E7D32),
+              color: readinessColor,
               borderRadius: BorderRadius.circular(12),
               boxShadow: const [
                 BoxShadow(color: Color(0x1A000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -756,15 +1041,14 @@ class OperationDetailScreen extends StatelessWidget {
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Icon(Icons.check_circle_rounded, color: Colors.white, size: 24),
-                SizedBox(width: 8),
-                Text(
-                  'العملية جاهز',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
+              children: [
+                Icon(readinessIcon, color: Colors.white, size: 24),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    readinessLabel,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
                   ),
                 ),
               ],
@@ -798,7 +1082,9 @@ class OperationDetailScreen extends StatelessWidget {
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('تاريخ التجهيز', completedAt),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
-                _buildDetailRow('الجاهزية', readiness, isGreen: true),
+                _buildDetailRow('الحالة من الخادم', readinessLabel, isGreen: isReady),
+                const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                _buildDetailRow('رد الخادم كما وصل', serverResponse.isNotEmpty ? serverResponse : 'لم يرسل الخادم ردًا تفصيليًا لهذه العملية'),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('الحالة', stateCode),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),

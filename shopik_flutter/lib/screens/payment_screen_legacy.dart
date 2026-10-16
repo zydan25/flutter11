@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../core/api_client.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
 import 'screen_common.dart';
@@ -54,12 +58,14 @@ class _DenominationItem {
   final int tier;
   final double price;
   final String days;
+  final String itemType;
   const _DenominationItem({
     this.id,
     this.name,
     required this.tier,
     required this.price,
     required this.days,
+    this.itemType = '',
   });
 }
 
@@ -104,12 +110,14 @@ class _OperatorSpec {
 
 class _PaymentScreenState extends State<PaymentScreen> {
   final phone = TextEditingController(text: '');
+  final phoneFocusNode = FocusNode();
   final rechargeAmount = TextEditingController(text: '100');
   final unitsCount = TextEditingController(text: '10');
 
-  String currentOpId = 'yemen_mobile';
-  String activeMainTab = 'باقات';
-  String subFilter = 'دفع مسبق';
+  String currentOpId = '';
+  String activeMainTab = '';
+  String billingFilter = 'الكل';
+  String packageKindFilter = 'الكل';
   String sabafonRegion = 'شمال';
   bool youSmartCharger = false;
   String netTab = 'adsl';
@@ -120,14 +128,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
   // Inquiry states (Loaded dynamically via live server inquiry)
   String ymPhoneBalance = '---';
   String ymPhoneType = '---';
-  String ymLoanStatus = 'none';
+  String ymLoanStatus = 'unknown';
   double ymLoanAmount = 0.0;
+  String? ymLoanInquiryTransactionId;
 
   Map<String, dynamic>? fourGInquiryData;
   Map<String, dynamic>? netInquiryData;
 
   static const _nativeChannel = MethodChannel('com.shopik.app/heads_up_notifications');
   bool _isSyncing = false;
+  bool _paymentInProgress = false;
+  Timer? _offersInquiryDebounce;
+  String? _lastOffersInquiryPhone;
+  String _lastHandledPhoneDigits = '';
 
   // Accordion state
   final Map<String, bool> expandedCategories = {
@@ -222,7 +235,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
     AppController? appInstance,
   }) {
     final app = appInstance ?? context.read<AppController>();
-    if (actionType == 'packages') {
+    if (actionType == 'fourg_pay' && currentOpId == 'yemen4g') {
+      final id = app.getServiceId('yemen4g_packages_pay', fallbacks: ['yemen4g_packages_list'], defaultId: 20)!;
+      final name = app.getServiceName('yemen4g_packages_pay', fallbacks: ['yemen4g_packages_list'], serviceId: id, defaultName: 'يمن فورجي - سداد باقة');
+      return (id: id, name: name);
+    } else if (actionType == 'packages') {
       if (currentOpId == 'yemen_mobile') {
         final id = app.getServiceId('bagatmobileget', fallbacks: ['yemen_mobile_packages_list', 'yemen_mobile_package_pay_activate', 'yemen_mobile_packages_query', 'yemen_mobile_packages_legacy'], defaultId: 4)!;
         final name = app.getServiceName('bagatmobileget', fallbacks: ['yemen_mobile_packages_list'], serviceId: id, defaultName: 'Yemen Mobile - تفعيل باقة');
@@ -293,8 +310,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final name = app.getServiceName('yemen4g_package_change', serviceId: id, defaultName: 'يمن فورجي - تغيير باقة');
       return (id: id, name: name);
     } else if (actionType == 'net_adsl') {
-      final id = app.getServiceId('yemen_net_packages_list', fallbacks: ['yemen_net_package_pay', 'post-adsl'], defaultId: 23)!;
-      final name = app.getServiceName('yemen_net_packages_list', serviceId: id, defaultName: 'يمن نت - ADSL');
+      final id = app.getServiceId('yemen_net_package_pay', fallbacks: ['yemen_net_packages_list', 'post-adsl'], defaultId: 24)!;
+      final name = app.getServiceName('yemen_net_package_pay', fallbacks: ['yemen_net_packages_list', 'post-adsl'], serviceId: id, defaultName: 'يمن نت - سداد ADSL');
       return (id: id, name: name);
     } else if (actionType == 'net_line') {
       final id = app.getServiceId('yemen_net_landline_pay', fallbacks: ['fixed_phone_service', 'post-line'], defaultId: 24)!;
@@ -354,6 +371,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final s4 = app.getServiceId('yemen_mobile_packages_list', defaultId: 4);
         if (s3 != null) ids.add(s3);
         if (s4 != null) ids.add(s4);
+        for (final key in const [
+          'yemen_mobile_package_pay_activate',
+          'yemen_mobile_packages_pay_activate',
+        ]) {
+          final id = app.getServiceId(key);
+          if (id != null && id > 0) ids.add(id);
+        }
         ids.addAll([3, 4]);
         break;
       case 'sabafon':
@@ -477,10 +501,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   String _resolveSubCategory(String text) {
-    if (text.contains('فوتر') || text.contains('فوترة') || text.toLowerCase().contains('postpaid')) {
-      return 'فوترة';
-    }
-    return 'دفع مسبق';
+    final lower = text.toLowerCase();
+    if (text.contains('فوتر') || text.contains('فوترة') || lower.contains('postpaid') || lower.contains('post_paid')) return 'فوترة';
+    if (text.contains('دفع مسبق') || lower.contains('prepaid') || lower.contains('pre_paid')) return 'دفع مسبق';
+    return _serverMobileBillingType({'mobileType': ymPhoneType}) ?? 'غير محدد';
   }
 
   String _buildSubTitle(Map<String, dynamic> it, Map<String, dynamic> meta, String text, _OperatorSpec op) {
@@ -499,6 +523,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Map<String, List<_PackageItem>> _getPackagesForOp(_OperatorSpec op, AppController app) {
     final sids = _getOperatorTargetServiceIds(op, app);
+    // Prefer items attached to a balance-charged purchase service when package
+    // IDs exist in both a query/catalog service and its purchase counterpart.
+    int purchasePriority(int sid) {
+      final contract = app.serviceDetailsCache[sid] ?? const <String, dynamic>{};
+      final kind = '${contract['service_kind'] ?? ''}'.trim().toLowerCase();
+      final chargeable = contract['requires_balance'] == true &&
+          (kind == 'purchase' || kind == 'action');
+      return chargeable ? 0 : 1;
+    }
+    sids.sort((a, b) {
+      final byKind = purchasePriority(a).compareTo(purchasePriority(b));
+      if (byKind != 0) return byKind;
+      return a.compareTo(b);
+    });
     final allItems = <Map<String, dynamic>>[];
     final seenItemIds = <dynamic>{};
 
@@ -872,6 +910,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void dispose() {
+    _offersInquiryDebounce?.cancel();
+    phoneFocusNode.dispose();
     phone.dispose();
     rechargeAmount.dispose();
     unitsCount.dispose();
@@ -938,6 +978,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final app = context.read<AppController>();
     try {
       await app.syncTelecomData(force: true);
+      try {
+        await app.refreshWalletAndReports();
+      } catch (_) {
+        // Service catalogue remains refreshed even if wallet refresh is temporarily unavailable.
+      }
       if (mounted) {
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
@@ -960,6 +1005,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   void _handlePhoneChange(String val) {
     final clean = val.replaceAll(RegExp(r'\D'), '');
+    final numberChanged = clean != _lastHandledPhoneDigits;
+    _lastHandledPhoneDigits = clean;
+
     String? matchedOpId;
     if (clean.startsWith('77') || clean.startsWith('78')) {
       matchedOpId = 'yemen_mobile';
@@ -975,19 +1023,108 @@ class _PaymentScreenState extends State<PaymentScreen> {
       matchedOpId = 'yemen_net';
     }
 
-    if (matchedOpId != null && matchedOpId != currentOpId) {
+    final previousOpId = currentOpId;
+    final keepPhoneFocus = phoneFocusNode.hasFocus;
+    if (matchedOpId != null) {
       final op = operators.firstWhere((o) => o.id == matchedOpId);
-      setState(() {
-        currentOpId = matchedOpId!;
-        activeMainTab = matchedOpId == 'yemen4g' ? 'باقة يمن 4G' : matchedOpId == 'yemen_net' ? 'الانترنت الارضي' : op.mainTabs.first;
-        operatorRestrictedToast = 'تم اختيار ${op.name} تلقائياً وفقاً لرقم الهاتف';
-      });
-      if (matchedOpId == 'yemen_mobile' && activeMainTab == 'باقات') {
-        _runInquiry('offers', quiet: true);
+      if (matchedOpId != currentOpId) {
+        setState(() {
+          currentOpId = matchedOpId!;
+          activeMainTab = op.mainTabs.contains('باقات') ? 'باقات' : op.mainTabs.first;
+          billingFilter = 'الكل';
+          packageKindFilter = 'شريحة';
+          operatorRestrictedToast = null;
+          balanceInquiryBanner = null;
+          activeSubscriptions = [];
+          ymPhoneBalance = '---';
+          ymPhoneType = '---';
+          ymLoanStatus = 'unknown';
+          ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
+          fourGInquiryData = null;
+          netInquiryData = null;
+        });
+        if (keepPhoneFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && phoneFocusNode.canRequestFocus) phoneFocusNode.requestFocus();
+          });
+        }
+      } else {
+        setState(() {
+          if (numberChanged) {
+            // Never show another subscriber's previous balance/type/loan for a new number.
+            billingFilter = 'الكل';
+            balanceInquiryBanner = null;
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'unknown';
+            ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
+            fourGInquiryData = null;
+            netInquiryData = null;
+          }
+        });
       }
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) setState(() => operatorRestrictedToast = null);
+    } else {
+      _offersInquiryDebounce?.cancel();
+      if (previousOpId.isNotEmpty || activeMainTab.isNotEmpty || operatorRestrictedToast != null) {
+        setState(() {
+          currentOpId = '';
+          activeMainTab = '';
+          billingFilter = 'الكل';
+          packageKindFilter = 'الكل';
+          operatorRestrictedToast = null;
+          balanceInquiryBanner = null;
+          activeSubscriptions = [];
+          ymPhoneBalance = '---';
+          ymPhoneType = '---';
+          ymLoanStatus = 'unknown';
+          ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
+          fourGInquiryData = null;
+          netInquiryData = null;
+        });
+        if (keepPhoneFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && phoneFocusNode.canRequestFocus) phoneFocusNode.requestFocus();
+          });
+        }
+      } else {
+        if (numberChanged) {
+          setState(() {
+            balanceInquiryBanner = null;
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'unknown';
+            ymLoanAmount = 0;
+          ymLoanInquiryTransactionId = null;
+            fourGInquiryData = null;
+            netInquiryData = null;
+          });
+        } else {
+          setState(() {});
+        }
+      }
+    }
+
+    if (currentOpId == 'yemen_mobile' &&
+        activeMainTab == 'باقات' &&
+        clean.length == 9 &&
+        (clean.startsWith('77') || clean.startsWith('78'))) {
+      if (_lastOffersInquiryPhone == clean && !numberChanged) return;
+      _offersInquiryDebounce?.cancel();
+      _offersInquiryDebounce = Timer(const Duration(milliseconds: 450), () {
+        if (!mounted || phone.text.replaceAll(RegExp(r'\D'), '') != clean) return;
+        _lastOffersInquiryPhone = clean;
+        _runInquiry('offers', quiet: false);
       });
+    } else {
+      _offersInquiryDebounce?.cancel();
+      if (clean.length < 9 || clean != _lastOffersInquiryPhone) {
+        _lastOffersInquiryPhone = null;
+      }
     }
   }
 
@@ -1000,24 +1137,141 @@ class _PaymentScreenState extends State<PaymentScreen> {
       balanceInquiryBanner = null;
     });
     if (currentOpId == 'yemen_mobile' && activeMainTab == 'باقات') {
-      _runInquiry('offers', quiet: false);
+      _lastOffersInquiryPhone = null;
+      if (phone.text.replaceAll(RegExp(r'\D'), '').length == 9) {
+        _runInquiry('offers', quiet: false);
+      } else {
+        _showInquiryNotice('أدخل رقم يمن موبايل كاملًا ليتم استعلام الباقات من الخادم.');
+      }
     }
   }
-
   void _selectMainTab(String t) {
     setState(() => activeMainTab = t);
     balanceInquiryBanner = null;
     if (currentOpId == 'yemen_mobile' && t == 'باقات') {
-      _runInquiry('offers', quiet: false);
+      _lastOffersInquiryPhone = null;
+      if (phone.text.replaceAll(RegExp(r'\D'), '').length == 9) {
+        _runInquiry('offers', quiet: false);
+      } else {
+        _showInquiryNotice('أدخل رقم يمن موبايل كاملًا ليتم استعلام الباقات من الخادم.');
+      }
     }
+  }
+  String _transactionStatus(Map<String, dynamic> tx) =>
+      '${tx['status'] ?? ''}'.trim().toLowerCase();
+
+  bool _isTransactionSuccess(Map<String, dynamic> tx) =>
+      const {'success', 'completed', 'done', 'executed'}.contains(_transactionStatus(tx));
+
+  bool _isTransactionFailure(Map<String, dynamic> tx) =>
+      const {'failed', 'error', 'rejected', 'refunded'}.contains(_transactionStatus(tx));
+
+  bool _isTransactionPending(Map<String, dynamic> tx) =>
+      const {'accepted', 'queued', 'pending', 'pending_provider', 'processing', 'manual_review'}.contains(_transactionStatus(tx)) ||
+      tx['_client_wait_timed_out'] == true;
+
+  String _transactionMessage(Map<String, dynamic> tx) =>
+      '${tx['error_message'] ?? tx['message'] ?? tx['detail'] ?? tx['error'] ?? ''}'.trim();
+
+  String? _serverMobileBillingType(Map<String, dynamic> data) {
+    final raw = data['mobileType'] ??
+        data['mobile_type'] ??
+        data['mobileTypeName'] ??
+        data['mobile_type_name'] ??
+        data['subscriber_type'] ??
+        data['billing_type'];
+    final value = '${raw ?? ''}'.trim().toLowerCase();
+    if (value.isEmpty) return null;
+    if (const {'1', 'prepaid', 'pre_paid', 'pre paid', 'pre-paid'}.contains(value) ||
+        value.contains('دفع مسبق') ||
+        value.contains('مسبق')) {
+      return 'دفع مسبق';
+    }
+    if (const {'2', 'postpaid', 'post_paid', 'post paid', 'post-paid', 'billing'}.contains(value) ||
+        value.contains('فوترة') ||
+        value.contains('فوتر')) {
+      return 'فوترة';
+    }
+    return null;
+  }
+
+  double _serverLoanAmount(Map<String, dynamic> data) {
+    for (final key in const [
+      'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+      'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+    ]) {
+      if (data.containsKey(key) && data[key] != null) {
+        final value = double.tryParse('${data[key]}'.trim());
+        if (value != null && value >= 0) return value;
+      }
+    }
+    return 0;
+  }
+
+  bool? _serverHasLoan(Map<String, dynamic> data) {
+    // A positive server-reported amount is stronger evidence than a conflicting
+    // boolean flag in a package response.
+    if (_serverLoanAmount(data) > 0) return true;
+    for (final key in const [
+      'loan', 'has_loan', 'hasLoan', 'is_loan', 'isLoan',
+      'sulfa', 'has_sulfa', 'hasSulfa', 'loan_status',
+    ]) {
+      if (!data.containsKey(key) || data[key] == null) continue;
+      final raw = data[key];
+      if (raw is bool) return raw;
+      final value = '$raw'.trim().toLowerCase();
+      if (const {'1', 'true', 'yes', 'yes loan', 'loan', 'متسلف', 'نعم'}.contains(value)) return true;
+      if (const {'0', 'false', 'no', 'none', 'no loan', 'غير متسلف', 'لا'}.contains(value)) return false;
+      if (value.contains('متسلف') && !value.contains('غير متسلف')) return true;
+      if (value.contains('غير متسلف')) return false;
+    }
+    final amountKeys = const [
+      'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+      'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+    ];
+    if (amountKeys.any(data.containsKey)) return _serverLoanAmount(data) > 0;
+    return null;
+  }
+
+  String _phoneInquiryTypeLabel(Map<String, dynamic> result) {
+    final billing = _serverMobileBillingType(result);
+    if (billing == 'فوترة') return 'فوترة | شريحة';
+    if (billing == 'دفع مسبق') return 'دفع مسبق | شريحة';
+    return 'نوع الشريحة غير محدد من الخادم';
+  }
+
+  void _showInquiryNotice(String message, {bool isError = false}) {
+    if (!mounted) return;
+    setState(() => operatorRestrictedToast = message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red.shade700 : AppColors.burgundy,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   Future<void> _runInquiry(String type, {bool quiet = false}) async {
     final currentPhone = phone.text.trim();
-    if (currentPhone.isEmpty) return;
+    final normalizedPhone = currentPhone.replaceAll(RegExp(r'\D'), '');
+    if (currentPhone.isEmpty ||
+        normalizedPhone.length < 7 ||
+        (currentOpId == 'yemen_mobile' && normalizedPhone.length != 9)) {
+      if (!quiet) {
+        _showInquiryNotice(
+          currentOpId == 'yemen_mobile'
+              ? 'أدخل رقم يمن موبايل كاملًا (9 أرقام) قبل الاستعلام.'
+              : 'أدخل رقم الهاتف أو الحساب كاملًا قبل الاستعلام.',
+          isError: true,
+        );
+      }
+      return;
+    }
 
-    if (!quiet) {
-      showDialog(
+    final loadingDialogShown = !quiet;
+    if (loadingDialogShown) {
+      showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) => const AlertDialog(
@@ -1026,7 +1280,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             children: [
               CircularProgressIndicator(color: AppColors.burgundy),
               SizedBox(width: 16),
-              Text('جاري الاستعلام اللحظي من المشغل...', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              Expanded(child: Text('جاري الاستعلام من الخادم وانتظار رد المشغل...', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold))),
             ],
           ),
         ),
@@ -1035,134 +1289,242 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     try {
       final app = Provider.of<AppController>(context, listen: false);
-      if (currentOpId == 'yemen_mobile') {
-        if (type == 'balance') {
-          final tx = await app.api.queryYemenMobileBalance(currentPhone);
-          final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
-          final bal = res['balance']?.toString() ?? '436.04';
-          final mType = res['mobileType']?.toString() == '2' ? 'فوترة | شريحة' : 'دفع مسبق | شريحة';
-          await app.refreshWalletAndReports();
-          if (mounted) {
-            setState(() {
-              ymPhoneBalance = '$bal ر.ي';
-              ymPhoneType = mType;
-              balanceInquiryBanner = 'رصيد الهاتف: $bal ر.ي • $mType • سلفة: ${ymLoanStatus == "loan" ? "$ymLoanAmount ر.ي" : "لا توجد سلفة"}';
-            });
+      if (mounted) {
+        setState(() {
+          operatorRestrictedToast = null;
+          if (type == 'balance') {
+            balanceInquiryBanner = null;
+            if (currentOpId == 'yemen_mobile') {
+              ymPhoneBalance = '---';
+              ymPhoneType = '---';
+            }
           }
-        } else {
-          // offers query (service 7) provides active offers, loan status, mobile type, and balance
-          final tx = await app.api.queryYemenMobileOffers(currentPhone);
-          final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
-          
-          String? liveBal = res['balance']?.toString();
-          if (liveBal == null || liveBal.isEmpty) {
-            try {
-              final bTx = await app.api.queryYemenMobileBalance(currentPhone);
-              final bRes = (bTx['result'] is Map) ? bTx['result'] as Map<String, dynamic> : <String, dynamic>{};
-              if (bRes['balance'] != null) {
-                liveBal = bRes['balance'].toString();
-              }
-            } catch (_) {}
+          if (type == 'offers') {
+            // Clear number-specific results while a new number is being queried;
+            // do not show a previous subscriber's offers as though they were current.
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'none';
+            ymLoanAmount = 0;
           }
-          
-          await app.refreshWalletAndReports();
+        });
+      }
 
-          if (mounted) {
-            setState(() {
-              if (res['offers'] is List) {
-                final list = res['offers'] as List;
-                if (list.isNotEmpty) {
-                  activeSubscriptions = list.map((item) {
-                    final o = item is Map ? item : <String, dynamic>{};
-                    return _ActiveSubItem(
-                      id: o['offerId']?.toString() ?? 'sub-${o['offerName']}',
-                      name: o['offerName']?.toString() ?? 'اشتراك نشط',
-                      startDate: o['offerStartDate']?.toString() ?? '',
-                      endDate: o['offerEndDate']?.toString() ?? '',
-                      type: (o['offerName']?.toString().contains('4G') ?? false) ? '4G' : 'باقة',
-                    );
-                  }).toList();
-                }
-              }
-              final bool hasLoan = res['loan'] == true || (res['loan_amount'] != null && res['loan_amount'].toString().isNotEmpty && res['loan_amount'].toString() != '0' && res['loan_amount'].toString() != '0.00');
-              ymLoanStatus = hasLoan ? 'loan' : 'none';
-              if (res['loan_amount'] != null && res['loan_amount'].toString().isNotEmpty) {
-                ymLoanAmount = double.tryParse(res['loan_amount'].toString()) ?? 122.0;
-              }
-              final mType = res['mobileType']?.toString() == '2' ? 'فوترة | شريحة' : 'دفع مسبق | شريحة';
-              ymPhoneType = mType;
-              if (liveBal != null && liveBal.isNotEmpty) {
-                ymPhoneBalance = '$liveBal ر.ي';
-              } else if (res['balance'] != null && res['balance'].toString().isNotEmpty) {
-                ymPhoneBalance = '${res['balance']} ر.ي';
-              }
-            });
+      if (currentOpId == 'yemen_mobile' && type == 'balance') {
+        final tx = await app.api.queryYemenMobileBalance(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام الرصيد إلى الخادم، وما زلنا ننتظر الرد. أعد الفحص بعد قليل.');
+            return;
           }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'لم يؤكد الخادم نجاح استعلام الرصيد.');
         }
-      } else if (currentOpId == 'yemen4g') {
-        final tx = await app.api.queryYemen4g(currentPhone);
-        final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('اكتمل الطلب دون تفاصيل رصيد قابلة للعرض من الخادم.');
+        final res = Map<String, dynamic>.from(rawResult);
+        final inquiryId = '${tx['id'] ?? tx['transaction_id'] ?? ''}'.trim();
+        final balance = '${res['balance'] ?? ''}'.trim();
+        if (balance.isEmpty) throw Exception('لم يتضمن رد الخادم قيمة رصيد الهاتف.');
+        final billing = _serverMobileBillingType(res);
+        final mobileType = _phoneInquiryTypeLabel(res);
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        try { unawaited(app.refreshWalletAndReports().catchError((_) {})); } catch (_) {}
         if (mounted) {
           setState(() {
-            final b = res['avblnce']?.toString() ?? (res['balance']?.toString() ?? '14.54 GB');
-            final p = res['baga_amount'] != null
-                ? '${res['baga_amount']} ر.ي (اقل سداد: ${res['minamtobill'] ?? res['baga_amount']})'
-                : '2,400 ر.ي (اقل مبلغ سداد: 2,400)';
-            final s = '${res['size'] ?? "4G 15"} سرعة: ${res['speed'] ?? "4G"}';
-            final exp = res['expdate']?.toString() ?? '2026-10-07 00:00:00';
+            ymPhoneBalance = '$balance ر.ي';
+            ymPhoneType = mobileType;
+            ymLoanAmount = loanAmount;
+            ymLoanInquiryTransactionId = inquiryId.isEmpty ? null : inquiryId;
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
+            if (billing != null) billingFilter = billing;
+            final loanText = hasLoan == true
+                ? '$loanAmount ر.ي'
+                : hasLoan == false
+                    ? 'لا توجد سلفة'
+                    : 'غير مفحوصة';
+            balanceInquiryBanner = 'رصيد الهاتف: $balance ر.ي • $mobileType • السلفة: $loanText';
+          });
+        }
+      } else if (currentOpId == 'yemen_mobile' && type == 'offers') {
+        final tx = await app.api.queryYemenMobileOffers(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام باقات يمن موبايل إلى الخادم، وما زلنا ننتظر النتيجة. لا تكرر الاستعلام الآن.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'لم يؤكد الخادم نجاح استعلام الباقات.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل باقات قابلة للعرض.');
+        final res = Map<String, dynamic>.from(rawResult);
+
+        String? liveBalance = '${res['balance'] ?? ''}'.trim();
+        String? balanceInquiryId;
+        // The balance endpoint is authoritative for billing type and loan. A package
+        // response may contain a default "no loan" flag, so query balance whenever
+        // this subscriber has not yet been checked for the current number.
+        final missingBilling = _serverMobileBillingType(res) == null;
+        final hasLoanAmountField = const [
+          'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+          'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+        ].any((key) => res[key] != null);
+        final missingLoan = ymLoanStatus == 'unknown' || !hasLoanAmountField;
+        if (liveBalance.isEmpty || missingBilling || missingLoan) {
+          try {
+            final balanceTx = await app.api.queryYemenMobileBalance(normalizedPhone);
+            if (_isTransactionSuccess(balanceTx) && balanceTx['result'] is Map) {
+              final fetchedInquiryId = '${balanceTx['id'] ?? balanceTx['transaction_id'] ?? ''}'.trim();
+              if (fetchedInquiryId.isNotEmpty) balanceInquiryId = fetchedInquiryId;
+              final balanceResult = Map<String, dynamic>.from(balanceTx['result'] as Map);
+              const authoritativeKeys = {
+                'balance', 'mobileType', 'mobile_type', 'mobileTypeName',
+                'mobile_type_name', 'subscriber_type', 'billing_type',
+                'loan', 'has_loan', 'hasLoan', 'is_loan', 'isLoan',
+                'sulfa', 'has_sulfa', 'hasSulfa', 'loan_status',
+                'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+                'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+              };
+              for (final key in authoritativeKeys) {
+                if (balanceResult.containsKey(key) && balanceResult[key] != null) {
+                  res[key] = balanceResult[key];
+                }
+              }
+              final fetchedBalance = '${balanceResult['balance'] ?? ''}'.trim();
+              if (fetchedBalance.isNotEmpty) liveBalance = fetchedBalance;
+            }
+          } catch (_) {
+            // Keep the type/loan unknown if the secondary inquiry fails.
+          }
+        }
+
+        final subscriptions = <_ActiveSubItem>[];
+        final rawOffers = res['offers'];
+        if (rawOffers is List) {
+          for (final item in rawOffers.whereType<Map>()) {
+            final offer = Map<String, dynamic>.from(item);
+            final offerName = '${offer['offerName'] ?? offer['name'] ?? 'اشتراك نشط'}';
+            subscriptions.add(_ActiveSubItem(
+              id: '${offer['offerId'] ?? offer['id'] ?? 'sub-$offerName'}',
+              name: offerName,
+              startDate: '${offer['offerStartDate'] ?? offer['startDate'] ?? ''}',
+              endDate: '${offer['offerEndDate'] ?? offer['endDate'] ?? ''}',
+              type: offerName.contains('4G') ? '4G' : 'باقة',
+            ));
+          }
+        }
+
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        final billing = _serverMobileBillingType(res);
+        final mobileType = _phoneInquiryTypeLabel(res);
+        if (mounted) {
+          setState(() {
+            activeSubscriptions = subscriptions;
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
+            ymLoanAmount = loanAmount;
+            if (balanceInquiryId != null) ymLoanInquiryTransactionId = balanceInquiryId;
+            ymPhoneType = mobileType;
+            if (billing != null) billingFilter = billing;
+            if (liveBalance != null && liveBalance!.isNotEmpty) ymPhoneBalance = '$liveBalance ر.ي';
+          });
+        }
+        if (rawOffers is! List) {
+          _showInquiryNotice('وصل رد الخادم، لكنه لم يتضمن قائمة الباقات المتوقعة. تحقق من إعدادات خدمة الباقات.', isError: true);
+        }
+      } else if (currentOpId == 'yemen4g') {
+        final tx = await app.api.queryYemen4g(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام يمن فورجي إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد استعلام يمن فورجي من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل يمن فورجي.');
+        final res = Map<String, dynamic>.from(rawResult);
+        if (mounted) {
+          setState(() {
             fourGInquiryData = {
-              'balance': b,
-              'packagePrice': p,
-              'speed': s,
-              'expiry': exp,
+              'balance': '${res['avblnce'] ?? res['balance'] ?? 'غير متوفر من الخادم'}',
+              'packagePrice': res['baga_amount'] == null ? 'غير متوفر من الخادم' : '${res['baga_amount']} ر.ي (أقل مبلغ سداد: ${res['minamtobill'] ?? res['baga_amount']})',
+              'speed': '${res['size'] ?? ''}${res['speed'] == null ? '' : ' سرعة: ${res['speed']}'}'.trim(),
+              'expiry': '${res['expdate'] ?? 'غير متوفر من الخادم'}',
             };
           });
         }
       } else if (currentOpId == 'yemen_net') {
-        final tx = await app.api.queryYemenNet(currentPhone);
-        final res = (tx['result'] is Map) ? tx['result'] as Map<String, dynamic> : <String, dynamic>{};
+        final typeParam = netTab == 'phone' ? 'phone' : 'adsl';
+        final tx = await app.api.queryYemenNet(normalizedPhone, type: typeParam);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال استعلام يمن نت إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
+          }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد استعلام يمن نت من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map || rawResult.isEmpty) throw Exception('لم يرجع الخادم تفاصيل يمن نت.');
+        final res = Map<String, dynamic>.from(rawResult);
         if (mounted) {
           setState(() {
             netInquiryData = {
-              'balance': res['balance']?.toString() ?? 'Gigabyte(s) 0.00',
-              'packagePrice': res['package_price']?.toString() ?? '5,100 اقل مبلغ سداد: 250',
-              'speed': res['speed']?.toString() ?? '4 ميجا ADSL',
-              'expiry': res['expiry']?.toString() ?? '2026-10-15 18:43:00',
+              'balance': '${res['balance'] ?? 'غير متوفر من الخادم'}',
+              'packagePrice': '${res['package_price'] ?? 'غير متوفر من الخادم'}',
+              'speed': '${res['speed'] ?? 'غير متوفر من الخادم'}',
+              'expiry': '${res['expiry'] ?? 'غير متوفر من الخادم'}',
             };
           });
         }
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          if (type == 'sulfa') {
-            ymLoanStatus = ymLoanStatus == 'none' ? 'loan' : 'none';
-            ymLoanAmount = 122.0;
-          } else if (type == 'balance') {
-            balanceInquiryBanner = 'رصيد الهاتف: 436.04 ر.ي • شريحة دفع مسبق • سلفة: 0.00 ر.ي';
-          } else if (currentOpId == 'yemen4g') {
-            fourGInquiryData = {
-              'balance': '14.54 GB',
-              'packagePrice': '2,400 اقل مبلغ سداد: 2400',
-              'speed': '4G 15 سرعة: 4G',
-              'expiry': '2026-10-07 00:00:00',
-            };
-          } else if (currentOpId == 'yemen_net') {
-            netInquiryData = {
-              'balance': '32.4 جيجابايت',
-              'packagePrice': '3,150 اقل سداد: 500',
-              'speed': '4 ميجا ADSL',
-              'expiry': '2026-10-05 (بعد 25 يوم)',
-            };
+      } else if (type == 'sulfa') {
+        // The live balance inquiry is the source of truth for loan status and amount.
+        final tx = await app.api.queryYemenMobileBalance(normalizedPhone);
+        if (!_isTransactionSuccess(tx)) {
+          if (_isTransactionPending(tx)) {
+            _showInquiryNotice('تم إرسال فحص السلفة إلى الخادم، وما زلنا ننتظر الرد.');
+            return;
           }
+          throw Exception(_transactionMessage(tx).isNotEmpty ? _transactionMessage(tx) : 'تعذر تأكيد فحص السلفة من الخادم.');
+        }
+        final rawResult = tx['result'];
+        if (rawResult is! Map) throw Exception('لم يرجع الخادم تفاصيل السلفة.');
+        final res = Map<String, dynamic>.from(rawResult);
+        final inquiryId = '${tx['id'] ?? tx['transaction_id'] ?? ''}'.trim();
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        final billing = _serverMobileBillingType(res);
+        if (mounted) {
+          setState(() {
+            ymLoanAmount = loanAmount;
+            ymLoanInquiryTransactionId = inquiryId.isEmpty ? null : inquiryId;
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
+            ymPhoneType = _phoneInquiryTypeLabel(res);
+            if (billing != null) billingFilter = billing;
+            final balance = '${res['balance'] ?? ''}'.trim();
+            if (balance.isNotEmpty) ymPhoneBalance = '$balance ر.ي';
+          });
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        final message = 'تعذر الاستعلام من الخادم: ${error.toString().replaceFirst('Exception: ', '')}';
+        setState(() {
+          operatorRestrictedToast = message;
+          if (type == 'balance') balanceInquiryBanner = null;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: Colors.red.shade700, duration: const Duration(seconds: 6)),
+        );
       }
     } finally {
-      if (!quiet && mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
+      if (loadingDialogShown && mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
       }
     }
   }
+
 
   String _getArabicAmountWords(double num) {
     final int val = num.toInt();
@@ -1208,9 +1570,289 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return '$val ريال يمني';
   }
 
-  void _openPackageModal(_PackageItem pkg) {
+
+
+  bool _matchesServerPackageItem(_PackageItem pkg, Map<String, dynamic> item) {
+    final sourceType = '${pkg.rawItem?['type'] ?? ''}'.trim().toLowerCase();
+    final targetType = '${item['type'] ?? ''}'.trim().toLowerCase();
+    Map<String, dynamic> metadata(Map<String, dynamic> value) =>
+        value['metadata'] is Map ? Map<String, dynamic>.from(value['metadata'] as Map) : <String, dynamic>{};
+    final sourceMeta = metadata(pkg.rawItem ?? <String, dynamic>{});
+    final targetMeta = metadata(item);
+    final sourceCode = '${pkg.code.isNotEmpty ? pkg.code : (sourceMeta['provider_offer_code'] ?? sourceMeta['exact_api_code'] ?? sourceMeta['package_code'] ?? '')}'.trim().toLowerCase();
+    final targetCode = '${targetMeta['provider_offer_code'] ?? targetMeta['exact_api_code'] ?? targetMeta['package_code'] ?? item['code'] ?? item['external_code'] ?? ''}'.trim().toLowerCase();
+    if (sourceCode.isNotEmpty && targetCode.isNotEmpty) return sourceCode == targetCode;
+    final namesMatch = '${pkg.name}'.trim().toLowerCase() == '${item['name'] ?? ''}'.trim().toLowerCase();
+    return namesMatch && (sourceType.isEmpty || targetType.isEmpty || sourceType == targetType);
+  }
+
+  List<int> _packagePurchaseServiceCandidates(AppController app, _PackageItem pkg) {
+    final ids = <int>[];
+    void add(dynamic value) {
+      final id = int.tryParse('${value ?? ''}');
+      if (id != null && id > 0 && !ids.contains(id)) ids.add(id);
+    }
+
+    final preferredKeys = <String, List<String>>{
+      'yemen_mobile': [
+        'yemen_mobile_package_pay_activate', 'yemen_mobile_package_pay',
+        'yemen_mobile_packages_pay', 'yemen_mobile_packages_activate',
+        'bagatmobileget', 'yemen_mobile_packages_list',
+      ],
+      'sabafon': [
+        'sabafon_package_pay_activate', 'sabafon_package_pay', 'sabafon_packages_pay',
+        'bagatsabafonget', 'sabafon_north_packages_list', 'sabafon_packages_legacy',
+      ],
+      'you': [
+        'you_package_pay_activate', 'you_package_pay', 'you_packages_pay',
+        'bagatyouget', 'bagatyou', 'you_packages_list',
+      ],
+      'y': [
+        'wai_package_pay_activate', 'wai_package_pay', 'wai_packages_pay',
+        'bagatwayget', 'wai_packages_list',
+      ],
+      'yemen4g': ['yemen4g_packages_pay', 'yemen4g_packages_list'],
+      'yemen_net': ['yemen_net_package_pay', 'yemen_net_packages_list'],
+    };
+    for (final key in preferredKeys[currentOpId] ?? const <String>[]) {
+      add(app.getServiceId(key));
+    }
+
+    final operatorTokens = switch (currentOpId) {
+      'yemen_mobile' => const ['yemen_mobile', 'bagatmobile'],
+      'sabafon' => const ['sabafon', 'bagatsabafon'],
+      'you' => const ['you', 'bagatyou'],
+      'y' => const ['wai', 'bagatway'],
+      'yemen4g' => const ['yemen4g'],
+      'yemen_net' => const ['yemen_net'],
+      _ => const <String>[],
+    };
+    for (final setting in app.serviceSettingsRaw) {
+      final key = '${setting['key'] ?? ''}'.trim().toLowerCase();
+      final packageLike = key.contains('package') || key.contains('bagat') || key.contains('plan');
+      final candidateAction = key.contains('pay') || key.contains('activat') || key.contains('list') || key.contains('package') || key.contains('bagat');
+      if (packageLike && candidateAction && operatorTokens.any((token) => key.contains(token))) {
+        add(setting['service_id'] ?? (setting['service'] is Map ? setting['service']['id'] : null));
+      }
+    }
+    for (final id in _getOperatorTargetServiceIds(currentOp, app)) {
+      add(id);
+    }
+    add(pkg.serviceId);
+    return ids;
+  }
+
+    Map<String, dynamic>? _serverPurchaseContractMatchingPackage(AppController app, _PackageItem pkg) {
+    for (final serviceId in _packagePurchaseServiceCandidates(app, pkg)) {
+      final contract = app.serviceDetailsCache[serviceId];
+      if (contract == null) continue;
+      if ('${contract['service_kind'] ?? ''}'.trim().toLowerCase() != 'purchase' ||
+          contract['requires_balance'] != true) continue;
+      final items = contract['items'];
+      if (items is! List) continue;
+      for (final raw in items.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(raw);
+        if (_matchesServerPackageItem(pkg, item)) {
+          return <String, dynamic>{
+            'service_id': serviceId,
+            'contract': contract,
+            'item': item,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _serverSupportsLoanAddition(_PackageItem pkg, AppController app) {
+    final match = _serverPurchaseContractMatchingPackage(app, pkg);
+    if (match == null) return false;
+    final contract = Map<String, dynamic>.from(match['contract'] as Map);
+    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    if (!const {'amount', 'item'}.contains(pricingMode)) return false;
+    final fields = contract['fields'];
+    if (fields is! List) return false;
+    const loanKeys = {
+      'loan', 'has_loan', 'hasloan', 'repay_loan', 'repayloan',
+      'include_loan', 'includeloan', 'pay_loan', 'settle_loan',
+      'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount',
+      'loan_balance', 'loanbalance',
+    };
+    final keys = fields.whereType<Map>()
+        .map((field) => '${field['key'] ?? ''}'.trim().toLowerCase().replaceAll('-', '_'))
+        .toSet();
+    final hasLoanField = keys.any((key) => loanKeys.contains(key));
+    return hasLoanField;
+  }
+
+  Future<void> _submitServerPackageAction(
+    _PackageItem pkg,
+    BuildContext sheetContext, {
+    required bool repayLoan,
+  }) async {
+    final app = context.read<AppController>();
+    final resolved = _serverPurchaseContractMatchingPackage(app, pkg);
+    if (resolved == null) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice(
+        'لم نعثر في كتالوج الخادم على خدمة شراء مهيأة لهذه الباقة بالاسم/الكود نفسه. لم نرسل أي طلب لتجنب تسديد خاطئ.',
+        isError: true,
+      );
+      return;
+    }
+    final contract = Map<String, dynamic>.from(resolved['contract'] as Map);
+    final item = Map<String, dynamic>.from(resolved['item'] as Map);
+    final serviceId = int.tryParse('${resolved['service_id']}') ?? 0;
+    final itemId = int.tryParse('${item['id'] ?? ''}') ?? 0;
+    final itemType = '${item['type'] ?? ''}'.trim();
+    final serverPrice = double.tryParse('${item['price'] ?? ''}');
+    if (serviceId <= 0 || itemId <= 0 || itemType.isEmpty || serverPrice == null || serverPrice <= 0) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('بيانات الخدمة أو الباقة غير مكتملة في الخادم؛ لم يتم إرسال السداد.', isError: true);
+      return;
+    }
+    if ((serverPrice - pkg.price).abs() > 0.009) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice(
+        'سعر الباقة في خدمة الشراء (${serverPrice.toStringAsFixed(2)} ر.ي) يختلف عن المعروض (${pkg.price.toStringAsFixed(2)} ر.ي). حدّث الباقات قبل المتابعة.',
+        isError: true,
+      );
+      return;
+    }
+    if (repayLoan &&
+        (ymLoanStatus != 'loan' ||
+            ymLoanAmount <= 0 ||
+            (ymLoanInquiryTransactionId ?? '').trim().isEmpty)) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('أعد فحص رصيد هذا الرقم من الخادم قبل إضافة السلفة؛ لا نستخدم مبلغًا أو مرجع استعلام قديمًا.', isError: true);
+      return;
+    }
+    if (repayLoan && !_serverSupportsLoanAddition(pkg, app)) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة الشراء في الخادم لا تعلن حقلًا صريحًا لتسديد السلفة؛ لم نرسل الطلب لتجنب خصم غير صحيح.', isError: true);
+      return;
+    }
+    final fields = contract['fields'];
+    if (fields is! List || fields.isEmpty) {
+      if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة الشراء لا تحتوي على حقول طلب مفعلة في الخادم.', isError: true);
+      return;
+    }
+    if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+    final serviceName = '${contract['name'] ?? 'تفعيل باقة يمن موبايل'}';
+    _openConfirmPaymentDialog(
+      itemName: pkg.name + (repayLoan ? ' + تسديد السلفة' : ''),
+      amount: serverPrice + (repayLoan ? ymLoanAmount : 0),
+      serviceId: serviceId,
+      serviceName: serviceName,
+      itemId: itemId,
+      itemType: itemType,
+      itemCode: pkg.code,
+      repayLoan: repayLoan,
+    );
+  }
+
+  Future<void> _submitYemenMobileBalanceForPackage(_PackageItem pkg, BuildContext sheetContext) async {
+    final app = context.read<AppController>();
+    final serviceId = app.getServiceId('yemen_mobile_recharge', defaultId: 1) ?? 1;
+    Map<String, dynamic>? contract;
+    try {
+      contract = await app.loadServiceContract(serviceId, force: true);
+    } catch (_) {}
+    if (!mounted) return;
+    final pricingMode = '${contract?['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    final kind = '${contract?['service_kind'] ?? ''}'.trim().toLowerCase();
+    if (contract == null || pricingMode != 'amount' || (kind.isNotEmpty && kind != 'purchase')) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة «تسديد الرصيد» غير مهيأة كخدمة مبلغ قابل للإدخال في الخادم؛ لم يتم إرسال أي طلب.', isError: true);
+      return;
+    }
+    final serviceName = '${contract['name'] ?? app.getServiceName('yemen_mobile_recharge', serviceId: serviceId, defaultName: 'تسديد رصيد يمن موبايل')}';
+    Navigator.of(sheetContext).pop();
+    _openConfirmPaymentDialog(
+      itemName: 'تسديد رصيد يمن موبايل',
+      amount: pkg.price,
+      serviceId: serviceId,
+      serviceName: serviceName,
+    );
+  }
+
+  Future<void> _submitYemenMobileActivationOnly(_PackageItem pkg, BuildContext sheetContext) async {
+    final app = context.read<AppController>();
+    final serviceId = app.getServiceId(
+      'yemen_mobile_package_activate_only',
+      fallbacks: ['yemen_mobile_activate_package', 'yemen_mobile_packages_activate_only'],
+    );
+    if (serviceId == null || serviceId <= 0) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('خدمة «تفعيل فقط» غير مرتبطة بخدمة مستقلة في إعدادات الخادم. لم يتم إرسال أي طلب لتجنب تنفيذ تسديد + تفعيل بدلًا منها.', isError: true);
+      return;
+    }
+
+    Map<String, dynamic>? contract;
+    try {
+      contract = await app.loadServiceContract(serviceId, force: true);
+    } catch (_) {}
+    if (!mounted) return;
+    final items = contract?['items'];
+    if (contract == null || items is! List) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('تعذر تحميل كتالوج خدمة «تفعيل فقط» من الخادم.', isError: true);
+      return;
+    }
+    final wantedCode = pkg.code.trim().toLowerCase();
+    final wantedName = pkg.name.trim().toLowerCase();
+    Map<String, dynamic>? match;
+    for (final raw in items.whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final metadata = item['metadata'] is Map ? Map<String, dynamic>.from(item['metadata'] as Map) : <String, dynamic>{};
+      final code = '${metadata['provider_offer_code'] ?? metadata['exact_api_code'] ?? metadata['package_code'] ?? item['code'] ?? item['external_code'] ?? ''}'.trim().toLowerCase();
+      final name = '${item['name'] ?? ''}'.trim().toLowerCase();
+      if ((wantedCode.isNotEmpty && code == wantedCode) || name == wantedName) {
+        match = item;
+        break;
+      }
+    }
+    final matched = match;
+    if (matched == null) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('الخادم لم يوفر الباقة «${pkg.name}» ضمن كتالوج «تفعيل فقط». لم ننفذ أي عملية.', isError: true);
+      return;
+    }
+    final itemId = int.tryParse('${matched['id'] ?? ''}') ?? 0;
+    final itemType = '${matched['type'] ?? ''}'.trim();
+    if (itemId <= 0 || itemType.isEmpty) {
+      Navigator.of(sheetContext).pop();
+      _showInquiryNotice('بيانات الباقة في خدمة «تفعيل فقط» غير مكتملة في الخادم.', isError: true);
+      return;
+    }
+    final amount = double.tryParse('${matched['price'] ?? ''}') ?? pkg.price;
+    final name = '${contract['name'] ?? app.getServiceName('yemen_mobile_package_activate_only', serviceId: serviceId, defaultName: 'يمن موبايل - تفعيل فقط')}';
+    Navigator.of(sheetContext).pop();
+    _openConfirmPaymentDialog(
+      itemName: 'تفعيل فقط - ${pkg.name}',
+      amount: amount,
+      serviceId: serviceId,
+      serviceName: name,
+      itemId: itemId,
+      itemType: itemType,
+      itemCode: wantedCode,
+    );
+  }
+
+  Future<void> _openPackageModal(_PackageItem pkg) async {
     bool includeLoan = false;
-    final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages');
+    final app = context.read<AppController>();
+    final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app);
+    final ids = _packagePurchaseServiceCandidates(app, pkg);
+    await Future.wait(ids.where((id) => !app.serviceDetailsCache.containsKey(id)).map((id) => app.loadServiceContract(id)));
+    final purchaseMatch = _serverPurchaseContractMatchingPackage(app, pkg);
+    final packageServiceId = int.tryParse('${purchaseMatch?['service_id'] ?? pkg.serviceId}') ?? resolvedService.id;
+    final packageContract = purchaseMatch?['contract'] is Map
+        ? Map<String, dynamic>.from(purchaseMatch!['contract'] as Map)
+        : app.serviceDetailsCache[packageServiceId];
+    final packageServiceName = '${packageContract?['name'] ?? resolvedService.name}';
+    final loanAdditionSupported = currentOp.id == 'yemen_mobile' && _serverSupportsLoanAddition(pkg, app);
 
     showModalBottomSheet(
       context: context,
@@ -1299,11 +1941,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('إضافة سداد السلفة (+122.0 ر.ي)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF92400E))),
+                        Expanded(
+                        child: Text(
+                          ymLoanStatus == 'loan' && ymLoanAmount > 0
+                              ? 'تسديد مبلغ السلفة (${money(ymLoanAmount)})'
+                              : ymLoanStatus == 'none'
+                                  ? 'لا توجد سلفة حسب رد الخادم'
+                                  : 'افحص السلفة أولاً',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF92400E)),
+                        ),
+                      ),
                         Switch(
                           value: includeLoan,
                           activeThumbColor: const Color(0xFFD97706),
-                          onChanged: (v) => setSheetState(() => includeLoan = v),
+                          onChanged: ymLoanStatus == 'loan' && ymLoanAmount > 0 && loanAdditionSupported
+                              ? (v) => setSheetState(() => includeLoan = v)
+                              : null,
                         ),
                       ],
                     ),
@@ -1320,20 +1973,48 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () {
-                    Navigator.pop(ctx);
-                    _openConfirmPaymentDialog(
-                      itemName: pkg.name + (includeLoan ? ' + سداد السلفة' : ''),
-                      amount: effectivePrice,
-                      serviceId: pkg.serviceId > 0 ? pkg.serviceId : resolvedService.id,
-                      serviceName: resolvedService.name,
-                      itemId: pkg.id,
-                      itemCode: pkg.code,
-                      itemType: 'telecom_plans',
-                    );
+                    final catalogItemType = '${pkg.rawItem?['type'] ?? ''}'.trim();
+                    if (pkg.rawItem == null || pkg.id <= 0 || catalogItemType.isEmpty) {
+                      Navigator.pop(ctx);
+                      _showInquiryNotice('هذه الباقة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات قبل السداد.', isError: true);
+                      return;
+                    }
+                    unawaited(_submitServerPackageAction(pkg, ctx, repayLoan: includeLoan));
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
-                  child: const Text('تأكيد طلب السداد', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  child: const Text('تسديد + تفعيل', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
                 ),
+                if (currentOp.id == 'yemen_mobile') ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _submitYemenMobileBalanceForPackage(pkg, ctx),
+                          icon: const Icon(Icons.account_balance_wallet_outlined, size: 17),
+                          label: const Text('تسديد الرصيد', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                          style: OutlinedButton.styleFrom(foregroundColor: currentOp.headerColor, side: BorderSide(color: currentOp.headerColor.withOpacity(0.5))),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _submitYemenMobileActivationOnly(pkg, ctx),
+                          icon: const Icon(Icons.bolt_rounded, size: 17),
+                          label: const Text('تفعيل فقط', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                          style: OutlinedButton.styleFrom(foregroundColor: currentOp.headerColor, side: BorderSide(color: currentOp.headerColor.withOpacity(0.5))),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (ymLoanStatus == 'loan' && ymLoanAmount > 0 && !loanAdditionSupported) ...[
+                    const SizedBox(height: 5),
+                    const Text(
+                      'يعرض الخادم مبلغ السلفة، لكن خدمة الباقة الحالية لا تتيح إضافته إلى مبلغ الخصم. لم نفعّل الخيار لتجنب خصم غير صحيح.',
+                      style: TextStyle(fontSize: 10, color: Color(0xFFB45309), fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ],
               ],
             ),
           );
@@ -1350,6 +2031,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) {
     final targetPhone = phone.text.trim();
     if (targetPhone.isEmpty) {
@@ -1381,6 +2063,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             itemId: itemId,
             itemType: itemType,
             itemCode: itemCode,
+            repayLoan: repayLoan,
           );
         },
       );
@@ -1393,6 +2076,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         itemId: itemId,
         itemType: itemType,
         itemCode: itemCode,
+        repayLoan: repayLoan,
       );
     }
   }
@@ -1493,6 +2177,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) {
     final targetPhone = phone.text.trim();
     final fallbackSpec = _resolveServiceForCurrentAction(
@@ -1841,6 +2526,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                     itemId: itemId,
                                     itemType: itemType,
                                     itemCode: itemCode,
+                                    repayLoan: repayLoan,
                                   );
                                 },
                                 style: FilledButton.styleFrom(
@@ -1908,7 +2594,245 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  // DIALOG 3: WAITING DIALOG WITH 8 MULTI-COLOR ROTATING DOTS (مطابقة تامة للصورة 3)
+  String _paymentStorageKey(AppController app) =>
+      'shopik_active_payment_-${app.user?.id ?? 0}';
+
+  String _paymentFingerprint({
+    required AppController app,
+    required int serviceId,
+    required String targetPhone,
+    required double amount,
+    int? itemId,
+    String? itemType,
+  }) {
+    final source = '${app.user?.id ?? 0}|$serviceId|$targetPhone|${amount.toStringAsFixed(2)}|${itemId ?? ''}|${itemType ?? ''}';
+    var hash = 0x811c9dc5;
+    for (final byte in source.codeUnits) {
+      hash ^= byte;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return hash.toRadixString(16);
+  }
+
+  Future<Map<String, dynamic>?> _readActivePayment(AppController app) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_paymentStorageKey(app));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveActivePayment(
+    AppController app, {
+    required String fingerprint,
+    required String idempotencyKey,
+    String? transactionId,
+    String? status,
+    required int serviceId,
+    required String serviceName,
+    required String targetPhone,
+    required double amount,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_paymentStorageKey(app), jsonEncode({
+        'fingerprint': fingerprint,
+        'idempotency_key': idempotencyKey,
+        'transaction_id': transactionId,
+        'status': status ?? 'submitting',
+        'service_id': serviceId,
+        'service_name': serviceName,
+        'target_phone': targetPhone,
+        'amount': amount,
+        'updated_at': DateTime.now().toIso8601String(),
+      }));
+    } catch (_) {
+      // The server transaction remains authoritative if local recovery storage fails.
+    }
+  }
+
+  Future<void> _clearActivePayment(AppController app) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_paymentStorageKey(app));
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> _buildServerPaymentPayload({
+    required AppController app,
+    required int serviceId,
+    required String targetPhone,
+    required double amount,
+    required String itemName,
+    required int? itemId,
+    required String? itemType,
+    required String? itemCode,
+    bool repayLoan = false,
+  }) async {
+    final loaded = await app.loadServiceContract(serviceId, force: true);
+    final contract = loaded ?? app.serviceDetailsCache[serviceId];
+    if (contract == null) {
+      throw Exception('تعذر تحميل تعريف الخدمة من الخادم. أعد مزامنة خدمات الاتصالات ثم حاول مرة أخرى.');
+    }
+    final rawFields = contract['fields'];
+    final hasCatalogItem = itemId != null && itemId > 0 && itemType != null && itemType.isNotEmpty;
+    if (rawFields is! List || rawFields.isEmpty) {
+      throw Exception('لم يُرجع الخادم حقول الطلب لهذه الخدمة؛ أوقفنا الإرسال لتجنب عملية غير مكتملة.');
+    }
+
+    final payload = <String, dynamic>{};
+    final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    final serviceKind = '${contract['service_kind'] ?? ''}'.trim().toLowerCase();
+    final requiresBalance = contract['requires_balance'] == true;
+    if (serviceKind != 'purchase' || !requiresBalance) {
+      throw Exception('الخدمة المختارة ليست خدمة شراء مدفوعة مهيأة لخصم الرصيد. لم نرسل الطلب حتى لا يتحول الاستعلام أو الكتالوج إلى عملية سداد.');
+    }
+    if (requiresBalance && pricingMode == 'item' && !hasCatalogItem) {
+      throw Exception('هذه الخدمة مسعّرة بحسب الباقة. اختر عنصرًا من كتالوج الخادم بدل استخدام فئة ثابتة قديمة.');
+    }
+    if (pricingMode == 'fixed') {
+      final serverPrice = num.tryParse('${contract['price'] ?? ''}');
+      if (serverPrice != null && (serverPrice - amount).abs() > 0.009) {
+        throw Exception('السعر المعروض ${amount.toStringAsFixed(2)} ر.ي لا يطابق السعر الثابت المسجل في الخادم (${serverPrice.toStringAsFixed(2)} ر.ي). لم نرسل الطلب لتجنب خصم مبلغ مختلف.');
+      }
+    }
+    for (final rawField in rawFields.whereType<Map>()) {
+      final field = Map<String, dynamic>.from(rawField);
+      final key = '${field['key'] ?? ''}'.trim();
+      if (key.isEmpty) continue;
+      final normalizedKey = key.toLowerCase();
+      final required = field['required'] == true;
+      final defaultValue = field['default'];
+      dynamic value;
+
+      if (const {'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount', 'loan_balance', 'loanbalance'}.contains(normalizedKey)) {
+        // Send only the authoritative amount from the server inquiry; 0 when not selected.
+        value = repayLoan ? ymLoanAmount : 0;
+      } else if (const {'loan', 'has_loan', 'hasloan', 'is_loan', 'isloan', 'repay_loan', 'repayloan', 'include_loan', 'includeloan', 'pay_loan', 'settle_loan', 'sulfa', 'has_sulfa', 'hassulfa'}.contains(normalizedKey)) {
+        value = repayLoan;
+      } else if (const {
+        'mobile', 'phone', 'msisdn', 'mobile_number', 'phone_number',
+        'subscriber_number', 'account_number', 'line_number', 'recipient_number',
+        'target_phone', 'number',
+      }.contains(normalizedKey)) {
+        value = targetPhone;
+      } else if (const {'amount', 'value', 'payment_amount'}.contains(normalizedKey)) {
+        if (itemId == null || pricingMode != 'item') {
+          value = repayLoan ? (amount - ymLoanAmount).clamp(0, double.infinity) : amount;
+        }
+      } else if (normalizedKey == 'type' && currentOpId == 'yemen_net') {
+        value = netTab == 'phone' ? 'phone' : 'adsl';
+      } else if (const {'operator', 'network', 'carrier', 'service_operator'}.contains(normalizedKey)) {
+        final choices = field['choices'];
+        final allowed = <String>{};
+        if (choices is List) {
+          for (final choice in choices) {
+            if (choice is Map) {
+              allowed.add('${choice['value'] ?? choice['key'] ?? choice['id'] ?? ''}');
+            } else if (choice != null) {
+              allowed.add('$choice');
+            }
+          }
+        }
+        if (allowed.isEmpty || allowed.contains(currentOpId)) {
+          value = currentOpId;
+        } else if (allowed.contains(currentOp.name)) {
+          value = currentOp.name;
+        }
+      } else if (const {'package', 'package_name', 'plan', 'plan_name'}.contains(normalizedKey)) {
+        if (itemId == null) value = itemName;
+      } else if (const {'code', 'package_code', 'provider_offer_code', 'external_code'}.contains(normalizedKey)) {
+        if (itemId == null && itemCode != null && itemCode.isNotEmpty) value = itemCode;
+      } else if (defaultValue != null && '$defaultValue'.trim().isNotEmpty) {
+        value = defaultValue;
+      }
+
+      if (value != null && '$value'.trim().isNotEmpty) {
+        payload[key] = value;
+      } else if (required &&
+          !(itemId != null &&
+            const {'amount', 'external_code', 'num', 'packageid', 'uniqcode'}.contains(normalizedKey))) {
+        final label = '${field['label'] ?? key}';
+        throw Exception('يتطلب الخادم الحقل «$label»، ولا يمكن تعبئته بأمان من الشاشة الحالية.');
+      }
+    }
+    return payload;
+  }
+
+  Future<void> _showPendingPaymentDialog({
+    required Map<String, dynamic> transaction,
+    required String itemName,
+    required String targetPhone,
+    required double amount,
+    bool unknownReference = false,
+  }) async {
+    final transactionId = '${transaction['id'] ?? transaction['transaction_id'] ?? ''}'.trim();
+    final message = unknownReference || transactionId.isEmpty
+        ? 'لم يصل تأكيد نهائي أو رقم مرجع من الخادم. قد يكون الطلب قد استُلم بالفعل. لا تعاود السداد الآن؛ افتح سجل العمليات وافحص الخادم أولًا.'
+        : 'استلم الخادم طلب «$itemName» للرقم $targetPhone بمبلغ ${amount.toStringAsFixed(2)} ر.ي، لكنه لم يُرجع نتيجة نهائية بعد. لا تكرر السداد؛ استخدم المرجع لفحص الحالة من سجل العمليات.';
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        backgroundColor: Colors.white,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: const BoxDecoration(color: Color(0xFFFFF7E6), shape: BoxShape.circle),
+                child: const Icon(Icons.hourglass_top_rounded, color: Color(0xFFB45309), size: 32),
+              ),
+              const SizedBox(height: 10),
+              const Text('تم إرسال العملية وجاري انتظار الرد', textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFFB45309))),
+              const SizedBox(height: 8),
+              Text(message, textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11.5, height: 1.6, color: Color(0xFF334155))),
+              if (transactionId.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: SelectableText(
+                    'مرجع العملية: $transactionId',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF0F172A)),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: FilledButton.styleFrom(backgroundColor: AppColors.burgundy, minimumSize: const Size(double.infinity, 42)),
+                  child: const Text('حسنًا، سأفحص سجل العمليات'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Preserve the original payment panel and confirmation UI. Only request
+  // validation, server polling, and transaction outcome handling are changed.
   void _executePaymentWithWaitingDialog({
     required String itemName,
     required double amount,
@@ -1918,11 +2842,46 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int? itemId,
     String? itemType,
     String? itemCode,
+    bool repayLoan = false,
   }) async {
-    final app = context.read<AppController>();
+    if (_paymentInProgress) {
+      _showInquiryNotice('يوجد طلب سداد قيد المعالجة. انتظر نتيجته قبل إرسال طلب آخر.', isError: true);
+      return;
+    }
+    if (targetPhone.trim().isEmpty || amount <= 0 || resolvedServiceId <= 0) {
+      _showInquiryNotice('بيانات السداد غير مكتملة. تحقق من الرقم والمبلغ والخدمة.', isError: true);
+      return;
+    }
+    if (repayLoan &&
+        (ymLoanStatus != 'loan' ||
+            ymLoanAmount <= 0 ||
+            (ymLoanInquiryTransactionId ?? '').trim().isEmpty)) {
+      _showInquiryNotice('لا يمكن إضافة السلفة دون استعلام رصيد ناجح وحديث لهذا الرقم.', isError: true);
+      return;
+    }
 
-    // Show custom Waiting Dialog with 8 multi-color rotating dots
-    showDialog(
+    final app = context.read<AppController>();
+    final fingerprint = _paymentFingerprint(
+      app: app,
+      serviceId: resolvedServiceId,
+      targetPhone: targetPhone,
+      amount: amount,
+      itemId: itemId,
+      itemType: itemType,
+    );
+    var idempotencyKey = '';
+    var requestSent = false;
+    _paymentInProgress = true;
+    bool waitingDialogOpen = true;
+    void closeWaitingDialog() {
+      if (!waitingDialogOpen) return;
+      waitingDialogOpen = false;
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => Dialog(
@@ -1936,17 +2895,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
             children: [
               MultiColorDotsSpinner(size: 52),
               SizedBox(height: 18),
-              Text(
-                'الرجاء الإنتظار قليلاً....',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: Color(0xFF1E293B)),
-              ),
+              Text('الرجاء الانتظار قليلًا...', textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: Color(0xFF1E293B))),
               SizedBox(height: 4),
-              Text(
-                'جاري إرسال طلب السداد إلى الخادم',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.bold),
-              ),
+              Text('جاري إرسال طلب السداد والتحقق من نتيجته لدى الخادم (حتى 40 ثانية)',
+                  textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
             ],
           ),
         ),
@@ -1954,70 +2907,188 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
 
     try {
+      final active = await _readActivePayment(app);
+      if (active != null) {
+        final activeId = '${active['transaction_id'] ?? ''}'.trim();
+        final previousFingerprint = '${active['fingerprint'] ?? ''}';
+        final previousKey = '${active['idempotency_key'] ?? ''}'.trim();
+        if (activeId.isNotEmpty) {
+          Map<String, dynamic>? existingTx;
+          try {
+            existingTx = await app.api.serviceTransaction(activeId);
+          } catch (_) {}
+          if (existingTx != null && _isTransactionPending(existingTx)) {
+            existingTx = await app.api.waitForServiceTransaction(
+              activeId,
+              initial: existingTx,
+              maxWait: const Duration(seconds: 30),
+              pollInterval: const Duration(seconds: 2),
+            );
+          }
+          if (existingTx != null && _isTransactionSuccess(existingTx)) {
+            await _clearActivePayment(app);
+            if (!mounted) return;
+            closeWaitingDialog();
+            unawaited(app.refreshWalletAndReports().catchError((_) {}));
+            _showSuccessDialog(
+              res: existingTx,
+              itemName: '${active['service_name'] ?? itemName}',
+              targetPhone: targetPhone,
+              amount: double.tryParse('${existingTx['amount'] ?? active['amount'] ?? amount}') ?? amount,
+              serviceId: resolvedServiceId,
+              serviceName: resolvedServiceName,
+            );
+            return;
+          }
+          if (existingTx != null && _isTransactionFailure(existingTx)) {
+            await _clearActivePayment(app);
+          } else {
+            if (!mounted) return;
+            closeWaitingDialog();
+            await _showPendingPaymentDialog(
+              transaction: existingTx ?? active,
+              itemName: itemName,
+              targetPhone: targetPhone,
+              amount: amount,
+              unknownReference: existingTx == null,
+            );
+            return;
+          }
+        } else if (previousFingerprint != fingerprint) {
+          closeWaitingDialog();
+          await _showPendingPaymentDialog(
+            transaction: active,
+            itemName: itemName,
+            targetPhone: targetPhone,
+            amount: amount,
+            unknownReference: true,
+          );
+          return;
+        } else {
+          idempotencyKey = previousKey;
+        }
+      }
+
+      if (idempotencyKey.isEmpty) {
+        idempotencyKey = 'shopik-pay-${app.user?.id ?? 0}-${DateTime.now().microsecondsSinceEpoch}-$fingerprint';
+      }
+      await _saveActivePayment(
+        app,
+        fingerprint: fingerprint,
+        idempotencyKey: idempotencyKey,
+        serviceId: resolvedServiceId,
+        serviceName: resolvedServiceName,
+        targetPhone: targetPhone,
+        amount: amount,
+      );
+
+      final payload = await _buildServerPaymentPayload(
+        app: app,
+        serviceId: resolvedServiceId,
+        targetPhone: targetPhone,
+        amount: amount,
+        itemName: itemName,
+        itemId: itemId,
+        itemType: itemType,
+        itemCode: itemCode,
+        repayLoan: repayLoan,
+      );
+      requestSent = true;
       final res = await app.api.submitAndPollServiceRequest(
         serviceId: resolvedServiceId,
         itemType: itemType,
         itemId: itemId,
-        payload: {
-          'mobile': targetPhone,
-          'amount': amount,
-          'package': itemName,
-          'operator': currentOpId,
-          if (itemId != null) 'item_id': itemId,
-          if (itemCode != null && itemCode.isNotEmpty) ...{
-            'code': itemCode,
-            'package_code': itemCode,
-            'provider_offer_code': itemCode,
-          },
-        },
+        idempotencyKey: idempotencyKey,
+        payload: payload,
+        repayLoan: repayLoan,
+        loanInquiryTransactionId: repayLoan ? ymLoanInquiryTransactionId : null,
+        maxWait: const Duration(seconds: 40),
+        pollInterval: const Duration(seconds: 2),
       );
 
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Close waiting dialog
+      closeWaitingDialog();
+      final status = _transactionStatus(res);
+      final transactionId = '${res['id'] ?? ''}'.trim();
+      await _saveActivePayment(
+        app,
+        fingerprint: fingerprint,
+        idempotencyKey: idempotencyKey,
+        transactionId: transactionId.isEmpty ? null : transactionId,
+        status: status,
+        serviceId: resolvedServiceId,
+        serviceName: resolvedServiceName,
+        targetPhone: targetPhone,
+        amount: amount,
+      );
+      unawaited(app.refreshWalletAndReports().catchError((_) {}));
 
-      await app.refreshWalletAndReports();
-
-      final status = '${res['status'] ?? 'success'}'.toLowerCase();
-      final isSuccess = status == 'success' || status == 'completed' || status == 'executed';
-
-      if (isSuccess) {
+      if (_isTransactionSuccess(res) && transactionId.isNotEmpty) {
+        await _clearActivePayment(app);
         _showSuccessDialog(
           res: res,
           itemName: itemName,
           targetPhone: targetPhone,
-          amount: amount,
+          amount: double.tryParse('${res['amount'] ?? ''}') ?? amount,
           serviceId: resolvedServiceId,
           serviceName: resolvedServiceName,
         );
+      } else if (const {'failed', 'error', 'rejected', 'refunded'}.contains(status)) {
+        await _clearActivePayment(app);
+        final reason = _transactionMessage(res).isNotEmpty
+            ? _transactionMessage(res)
+            : (status == 'refunded' ? 'أعاد الخادم حالة استرداد الرصيد.' : 'أعاد الخادم حالة فشل للعملية.');
+        _showFailureDialog(errorReason: reason);
       } else {
-        _showFailureDialog(
-          errorReason: '${res['message'] ?? res['detail'] ?? res['error'] ?? 'فشلت العملية لدى المزود'}',
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // Close waiting dialog
-
-      // Try local deduction fallback
-      final success = await app.deductBalance(amount, '$itemName لرقم $targetPhone');
-      if (success) {
-        _showSuccessDialog(
-          res: {
-            'status': 'success',
-            'message': 'تم قيد عملية السداد بنجاح وخصم المبلغ من رصيد المحفظة.',
-            'id': 'SHK-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}',
-          },
+        await _showPendingPaymentDialog(
+          transaction: res,
           itemName: itemName,
           targetPhone: targetPhone,
           amount: amount,
-          serviceId: resolvedServiceId,
-          serviceName: resolvedServiceName,
-        );
-      } else {
-        _showFailureDialog(
-          errorReason: e.toString().replaceFirst('Exception: ', ''),
+          unknownReference: transactionId.isEmpty,
         );
       }
+    } catch (error) {
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        closeWaitingDialog();
+      }
+      final apiRejected = error is ApiException &&
+          const {400, 401, 403, 404, 405, 422}.contains(error.statusCode);
+      if (apiRejected || !requestSent) {
+        await _clearActivePayment(app);
+        if (mounted) {
+          _showFailureDialog(
+            errorReason: 'رفض الخادم الطلب أو لم تكتمل بياناته: ${error.toString().replaceFirst('Exception: ', '')}',
+          );
+        }
+      } else {
+        // A timeout/5xx can happen after the backend has accepted the POST.
+        // Keep the idempotency key and block duplicate payment until reconciled.
+        final active = await _readActivePayment(app);
+        final storedKey = '${active?['idempotency_key'] ?? idempotencyKey}';
+        await _saveActivePayment(
+          app,
+          fingerprint: fingerprint,
+          idempotencyKey: storedKey,
+          transactionId: active?['transaction_id']?.toString(),
+          status: 'unknown',
+          serviceId: resolvedServiceId,
+          serviceName: resolvedServiceName,
+          targetPhone: targetPhone,
+          amount: amount,
+        );
+        if (mounted) {
+          await _showPendingPaymentDialog(
+            transaction: active ?? <String, dynamic>{},
+            itemName: itemName,
+            targetPhone: targetPhone,
+            amount: amount,
+            unknownReference: true,
+          );
+        }
+      }
+    } finally {
+      _paymentInProgress = false;
     }
   }
 
@@ -2032,7 +3103,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     String? serviceName,
   }) {
     final app = context.read<AppController>();
-    final ref = res['id'] ?? res['reference'] ?? res['transaction_id'] ?? 'SHK-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}';
+    final ref = res['id'] ?? res['reference'] ?? res['transaction_id'] ?? 'غير متوفر من الخادم';
 
     showDialog(
       context: context,
@@ -2319,125 +3390,45 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final op = currentOp;
 
     return ScreenFrame(
-      title: 'تسديد شبكات الاتصالات اليمنية',
+      title: 'شبكة السداد',
       color: op.headerColor,
       actions: [
-        IconButton(
-          onPressed: _syncTelecomPackages,
-          icon: _isSyncing
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                )
-              : const Icon(Icons.sync_rounded),
-          tooltip: 'مزامنة باقات وخدمات الاتصالات من الخادم',
-        ),
-        IconButton(
-          onPressed: () => _runInquiry('balance'),
-          icon: const Icon(Icons.refresh_rounded),
-          tooltip: 'تحديث الرصيد',
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              onTap: () => setState(() => userBalanceHidden = !userBalanceHidden),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('الرصيد', style: TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
+                    Text(
+                      userBalanceHidden ? '••••' : money(app.walletBalance),
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: () => _syncTelecomPackages(),
+              icon: _isSyncing
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.refresh_rounded),
+              tooltip: 'تحديث الرصيد والباقات من الخادم',
+            ),
+          ],
         ),
       ],
       child: ListView(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 80),
         children: [
-          // Top Header Balance Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: op.headerColor,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(color: op.headerColor.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 3)),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.account_balance_wallet_outlined, color: Colors.white70, size: 20),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () => setState(() => userBalanceHidden = !userBalanceHidden),
-                      child: Row(
-                        children: [
-                          Text(
-                            userBalanceHidden ? '••••••' : money(app.walletBalance),
-                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(width: 4),
-                          const Text('رصيدي', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: () => app.refreshAll(),
-                      icon: const Icon(Icons.sync_rounded, color: Colors.white, size: 16),
-                      label: const Text('تحديث', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          // Wallet balance and refresh are shown in the app header; do not repeat them here.
 
-          const SizedBox(height: 10),
-
-          // Circular Operators Row (مطابقة تامة لشبكات السداد)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE2E8F0))),
-            child: Column(
-              children: [
-                const Text('اختر شبكة السداد', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: operators.map((o) {
-                    final isSelected = o.id == currentOpId;
-                    return GestureDetector(
-                      onTap: () => _selectOperator(o),
-                      child: Column(
-                        children: [
-                          Container(
-                            width: 42,
-                            height: 42,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isSelected ? o.headerColor : Colors.white,
-                              border: Border.all(color: o.headerColor, width: isSelected ? 2.5 : 1.5),
-                              boxShadow: [
-                                if (isSelected) BoxShadow(color: o.headerColor.withOpacity(0.35), blurRadius: 8, offset: const Offset(0, 2)),
-                              ],
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              o.shortName,
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : o.headerColor,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(o.name, style: TextStyle(fontSize: 9, fontWeight: isSelected ? FontWeight.w900 : FontWeight.bold, color: isSelected ? o.headerColor : const Color(0xFF475569))),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-
-          // Operator Restriction Toast Banner
+                    // Operator Restriction Toast Banner
           if (operatorRestrictedToast != null) ...[
             const SizedBox(height: 8),
             Container(
@@ -2470,6 +3461,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 Expanded(
                   child: TextField(
                     controller: phone,
+                    focusNode: phoneFocusNode,
                     textDirection: TextDirection.ltr,
                     keyboardType: TextInputType.phone,
                     maxLength: 9,
@@ -2488,49 +3480,48 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   IconButton(
                     onPressed: () {
                       phone.clear();
-                      setState(() {});
+                      _handlePhoneChange('');
                     },
                     icon: const Icon(Icons.cancel_rounded, size: 18, color: Color(0xFF94A3B8)),
                   ),
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: op.headerColor),
-                  alignment: Alignment.center,
-                  child: Text(op.shortName, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                ),
+                if (currentOpId.isNotEmpty)
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: op.headerColor),
+                    alignment: Alignment.center,
+                    child: Text(op.shortName, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
               ],
             ),
           ),
 
           const SizedBox(height: 10),
 
-          // Dynamic Main Tabs Bar
-          _buildMainTabsBar(op),
-
-          const SizedBox(height: 12),
-
-          // TAB CONTENT
-          if (activeMainTab == 'باقات') ...[
-            _buildPackagesTab(op),
-          ] else if (activeMainTab == 'رصيد' || activeMainTab == 'رصيد يمن 4G') ...[
-            _buildBalanceTab(op),
-          ] else if (activeMainTab == 'فوري') ...[
-            _buildInstantTab(op),
-          ] else if (activeMainTab == 'باقة يمن 4G') ...[
-            _buildFourGTab(op),
-          ] else if (activeMainTab == 'الانترنت الارضي' || activeMainTab == 'الهاتف الثابت') ...[
-            _buildNetTab(op),
-          ] else ...[
-            // Default generic tab
-            PageCard(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('خدمة $activeMainTab مفعلة وجاهزة للمشغل ${op.name}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          if (currentOpId.isNotEmpty) ...[
+            // Dynamic Main Tabs Bar
+            _buildMainTabsBar(op),
+            const SizedBox(height: 12),
+            // TAB CONTENT
+            if (activeMainTab == 'باقات') ...[
+              _buildPackagesTab(op),
+            ] else if (activeMainTab == 'رصيد' || activeMainTab == 'رصيد يمن 4G') ...[
+              _buildBalanceTab(op),
+            ] else if (activeMainTab == 'فوري') ...[
+              _buildInstantTab(op),
+            ] else if (activeMainTab == 'باقة يمن 4G') ...[
+              _buildFourGTab(op),
+            ] else if (activeMainTab == 'الانترنت الارضي' || activeMainTab == 'الهاتف الثابت') ...[
+              _buildNetTab(op),
+            ] else ...[
+              PageCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: const Text('اختر نوع الخدمة بعد إدخال الرقم', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
               ),
-            ),
-          ],
-        ],
+            ],
+          ],        ],
       ),
     );
   }
@@ -2606,6 +3597,71 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
   }
 
+
+  bool _packageMatchesBillingFilter(_PackageItem pkg) {
+    if (billingFilter == 'الكل') return true;
+    final metadata = pkg.rawItem?['metadata'] is Map
+        ? Map<String, dynamic>.from(pkg.rawItem!['metadata'] as Map)
+        : <String, dynamic>{};
+    final text = '${pkg.name} ${pkg.subTitle} ${pkg.description} ${metadata['billing_type'] ?? ''} ${metadata['mobile_type'] ?? ''}'.toLowerCase();
+    final isPostpaid = text.contains('فوترة') || text.contains('فوتر') || text.contains('postpaid') || text.contains('post_paid');
+    final isPrepaid = text.contains('دفع مسبق') || text.contains('prepaid') || text.contains('pre_paid');
+    if (isPostpaid) return billingFilter == 'فوترة';
+    if (isPrepaid) return billingFilter == 'دفع مسبق';
+    final serverBilling = _serverMobileBillingType({'mobileType': ymPhoneType});
+    return serverBilling == null || serverBilling == billingFilter;
+  }
+
+  bool _packageMatchesKindFilter(_PackageItem pkg) {
+    if (packageKindFilter == 'الكل') return true;
+    final metadata = pkg.rawItem?['metadata'] is Map
+        ? Map<String, dynamic>.from(pkg.rawItem!['metadata'] as Map)
+        : <String, dynamic>{};
+    final text = '${pkg.name} ${pkg.subTitle} ${pkg.description} '
+        '${metadata['package_kind'] ?? metadata['chip_type'] ?? metadata['activation_type'] ?? metadata['medium'] ?? ''}'.toLowerCase();
+    final hasSim = text.contains('شريحة') || text.contains('شريحه') || text.contains('sim');
+    final hasProgramming = text.contains('برمجة') || text.contains('برمجه') || text.contains('program');
+    if (hasSim && hasProgramming) return true;
+    if (packageKindFilter == 'شريحة') return hasSim || !hasProgramming;
+    if (packageKindFilter == 'برمجة') return hasProgramming || !hasSim;
+    return true;
+  }
+
+  Widget _buildPackageFilterRow(
+    List<String> options,
+    String selected,
+    ValueChanged<String> onSelected,
+    Color activeColor,
+  ) {
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: options.map((option) {
+          final isSelected = selected == option;
+          return Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: ChoiceChip(
+              label: Text(
+                option,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w900,
+                  color: isSelected ? Colors.white : const Color(0xFF475569),
+                ),
+              ),
+              selected: isSelected,
+              selectedColor: activeColor,
+              backgroundColor: Colors.white,
+              side: BorderSide(color: isSelected ? activeColor : const Color(0xFFCBD5E1)),
+              onSelected: (_) => onSelected(isSelected ? 'الكل' : option),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildPackagesTab(_OperatorSpec op) {
     final app = context.watch<AppController>();
     final Map<String, List<_PackageItem>> pkgMap = _getPackagesForOp(op, app);
@@ -2655,7 +3711,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      ymLoanStatus == 'none' ? 'غير متسلف 😀' : 'متسلف 122.0 ⚠️',
+                      ymLoanStatus == 'loan'
+                          ? 'متسلف ${ymLoanAmount.toStringAsFixed(2)} ر.ي ⚠️'
+                          : ymLoanStatus == 'none'
+                              ? 'غير متسلف'
+                              : 'السلفة غير مفحوصة',
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: ymLoanStatus == 'none' ? AppColors.emerald : Colors.red),
                     ),
                   ],
@@ -2667,30 +3727,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
         const SizedBox(height: 10),
 
-        // Sub-filters (دفع مسبق / فوترة / شريحة / برمجة / 4G)
-        SizedBox(
-          height: 32,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: ['دفع مسبق', 'فوترة', 'شريحة', 'برمجة', '4G'].map((sub) {
-              final isSel = sub == subFilter;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: ChoiceChip(
-                  label: Text(sub, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSel ? Colors.white : const Color(0xFF64748B))),
-                  selected: isSel,
-                  selectedColor: op.activeTabColor,
-                  backgroundColor: Colors.white,
-                  onSelected: (_) => setState(() => subFilter = sub),
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-
-        const SizedBox(height: 10),
-
-        // Active Subscriptions Card (الاشتراكات الحالية)
+        // Active Subscriptions Card// Active Subscriptions Card (الاشتراكات الحالية)
         if (op.id == 'yemen_mobile' && activeSubscriptions.isNotEmpty) ...[
           Container(
             decoration: BoxDecoration(
@@ -2746,37 +3783,24 @@ class _PaymentScreenState extends State<PaymentScreen> {
           const SizedBox(height: 10),
         ],
 
-        // Horizontal Package Filter Chips (الكل, دفع مسبق, فوترة, شريحة, برمجة, 4G)
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: ['الكل', 'دفع مسبق', 'فوترة', 'شريحة', 'برمجة', '4G'].map((f) {
-              final isSel = subFilter == f;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: InkWell(
-                  onTap: () => setState(() => subFilter = f),
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: isSel ? op.headerColor : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: isSel ? op.headerColor : const Color(0xFFCBD5E1)),
-                    ),
-                    child: Text(
-                      f,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: isSel ? Colors.white : const Color(0xFF475569),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+        // Independent filters: billing type AND SIM/programming.
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildPackageFilterRow(
+              ['دفع مسبق', 'فوترة'],
+              billingFilter,
+              (v) => setState(() => billingFilter = v),
+              op.headerColor,
+            ),
+            const SizedBox(height: 4),
+            _buildPackageFilterRow(
+              ['شريحة', 'برمجة'],
+              packageKindFilter,
+              (v) => setState(() => packageKindFilter = v),
+              op.headerColor,
+            ),
+          ],
         ),
         const SizedBox(height: 10),
 
@@ -2785,28 +3809,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
           final catTitle = entry.key;
           final allPkgs = entry.value;
 
-          // Filter packages based on selected chip
-          final pkgs = allPkgs.where((pkg) {
-            if (subFilter == 'الكل') return true;
-            if (subFilter == 'دفع مسبق') {
-              return pkg.subTitle.contains('دفع مسبق') || pkg.name.contains('دفع مسبق') || !pkg.subTitle.contains('فوتر');
-            }
-            if (subFilter == 'فوترة') {
-              return pkg.subTitle.contains('فوتر') || pkg.name.contains('فوتر') || pkg.name.contains('فوترة');
-            }
-            if (subFilter == 'شريحة') {
-              return pkg.subTitle.contains('شريحة') || pkg.name.contains('شريحة') || pkg.category.contains('شريحة');
-            }
-            if (subFilter == 'برمجة') {
-              return pkg.subTitle.contains('برمجة') || pkg.name.contains('برمجة');
-            }
-            if (subFilter == '4G') {
-              return pkg.name.contains('4G') || pkg.name.contains('فورجي') || pkg.category.contains('4G') || pkg.category.contains('فورجي');
-            }
-            return true;
-          }).toList();
+          // Both filters apply together; unknown catalog metadata remains visible.
+          final pkgs = allPkgs.where((pkg) =>
+              _packageMatchesBillingFilter(pkg) && _packageMatchesKindFilter(pkg)).toList();
 
-          if (pkgs.isEmpty && subFilter != 'الكل') {
+          if (pkgs.isEmpty && (billingFilter != 'الكل' || packageKindFilter != 'الكل')) {
             return const SizedBox.shrink();
           }
 
@@ -3132,6 +4139,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           tier: tier > 0 ? tier : price.toInt(),
           price: price > 0 ? price : tier.toDouble(),
           days: '${it['validity_days'] ?? it['days'] ?? 'صلاحية الفئة'}',
+          itemType: '${it['type'] ?? ''}',
         ));
       }
       if (dynList.isNotEmpty) {
@@ -3210,14 +4218,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
           itemBuilder: (_, i) {
             final d = list[i];
             return InkWell(
-              onTap: () => _openConfirmPaymentDialog(
-                itemName: d.name != null && d.name!.isNotEmpty ? d.name! : 'فئة ${d.tier}',
-                amount: d.price,
-                serviceId: resolvedInstant.id,
-                serviceName: resolvedInstant.name,
-                itemId: d.id,
-                itemType: 'denominations',
-              ),
+              onTap: () {
+                if (d.id == null || d.itemType.isEmpty) {
+                  _showInquiryNotice('هذه الفئة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات ثم أعد المحاولة.', isError: true);
+                  return;
+                }
+                _openConfirmPaymentDialog(
+                  itemName: d.name != null && d.name!.isNotEmpty ? d.name! : 'فئة ${d.tier}',
+                  amount: d.price,
+                  serviceId: resolvedInstant.id,
+                  serviceName: resolvedInstant.name,
+                  itemId: d.id,
+                  itemType: d.itemType,
+                );
+              },
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: cardBorder)),
@@ -3272,7 +4286,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 children: fourGDenominations.map((item) {
                   return InkWell(
                     onTap: () {
-                      final resolved4g = _resolveServiceForCurrentAction(actionType: 'packages');
+                      final resolved4g = _resolveServiceForCurrentAction(actionType: 'fourg_pay');
                       _openConfirmPaymentDialog(
                         itemName: item['label'],
                         amount: item['price'],
