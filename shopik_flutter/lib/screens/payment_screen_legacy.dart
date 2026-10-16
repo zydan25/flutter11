@@ -1763,14 +1763,23 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  void _openPackageModal(_PackageItem pkg) {
+  Future<void> _openPackageModal(_PackageItem pkg) async {
     bool includeLoan = false;
     final app = context.read<AppController>();
     final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app);
-    final packageServiceId = pkg.serviceId > 0 ? pkg.serviceId : resolvedService.id;
-    final packageContract = app.serviceDetailsCache[packageServiceId];
+    if (currentOp.id == 'yemen_mobile') {
+      final ids = _yemenMobilePackageServiceCandidates(app, pkg);
+      await Future.wait(ids.where((id) => !app.serviceDetailsCache.containsKey(id)).map((id) => app.loadServiceContract(id)));
+    }
+    final purchaseMatch = currentOp.id == 'yemen_mobile'
+        ? _serverPurchaseContractMatchingPackage(app, pkg)
+        : null;
+    final packageServiceId = int.tryParse('${purchaseMatch?['service_id'] ?? pkg.serviceId}') ?? resolvedService.id;
+    final packageContract = purchaseMatch?['contract'] is Map
+        ? Map<String, dynamic>.from(purchaseMatch!['contract'] as Map)
+        : app.serviceDetailsCache[packageServiceId];
     final packageServiceName = '${packageContract?['name'] ?? resolvedService.name}';
-    final loanAdditionSupported = _serverSupportsLoanAddition(pkg, app);
+    final loanAdditionSupported = currentOp.id == 'yemen_mobile' && _serverSupportsLoanAddition(pkg, app);
 
     showModalBottomSheet(
       context: context,
@@ -1897,16 +1906,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       _showInquiryNotice('هذه الباقة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات قبل السداد.', isError: true);
                       return;
                     }
+                    if (currentOp.id == 'yemen_mobile') {
+                      unawaited(_submitYemenMobilePackageAction(pkg, ctx, repayLoan: includeLoan));
+                      return;
+                    }
                     Navigator.pop(ctx);
                     _openConfirmPaymentDialog(
-                      itemName: pkg.name + (includeLoan ? ' + سداد السلفة' : ''),
+                      itemName: pkg.name,
                       amount: effectivePrice,
                       serviceId: packageServiceId,
                       serviceName: packageServiceName,
                       itemId: pkg.id,
                       itemCode: pkg.code,
                       itemType: catalogItemType,
-                      repayLoan: includeLoan,
                     );
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
