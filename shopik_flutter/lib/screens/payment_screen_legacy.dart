@@ -117,7 +117,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String currentOpId = '';
   String activeMainTab = '';
   String billingFilter = 'الكل';
-  String packageKindFilter = 'الكل';
+  String packageKindFilter = 'شريحة';
   String sabafonRegion = 'شمال';
   bool youSmartCharger = false;
   String netTab = 'adsl';
@@ -1134,6 +1134,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!op.mainTabs.contains(activeMainTab)) {
         activeMainTab = op.mainTabs.first;
       }
+      if (op.id == 'yemen_mobile') packageKindFilter = 'شريحة';
       balanceInquiryBanner = null;
     });
     if (currentOpId == 'yemen_mobile' && activeMainTab == 'باقات') {
@@ -1182,12 +1183,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
         data['billing_type'];
     final value = '${raw ?? ''}'.trim().toLowerCase();
     if (value.isEmpty) return null;
-    if (const {'1', 'prepaid', 'pre_paid', 'pre paid', 'pre-paid'}.contains(value) ||
+    if (const {'0', 'prepaid', 'pre_paid', 'pre paid', 'pre-paid'}.contains(value) ||
         value.contains('دفع مسبق') ||
         value.contains('مسبق')) {
       return 'دفع مسبق';
     }
-    if (const {'2', 'postpaid', 'post_paid', 'post paid', 'post-paid', 'billing'}.contains(value) ||
+    if (const {'1', '2', 'postpaid', 'post_paid', 'post paid', 'post-paid', 'billing'}.contains(value) ||
         value.contains('فوترة') ||
         value.contains('فوتر')) {
       return 'فوترة';
