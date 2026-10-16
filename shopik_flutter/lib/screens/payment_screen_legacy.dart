@@ -955,6 +955,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final app = context.read<AppController>();
     try {
       await app.syncTelecomData(force: true);
+      try {
+        await app.refreshWalletAndReports();
+      } catch (_) {
+        // Service catalogue remains refreshed even if wallet refresh is temporarily unavailable.
+      }
       if (mounted) {
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
