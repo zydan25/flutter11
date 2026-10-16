@@ -3382,6 +3382,41 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return true;
   }
 
+  Widget _buildPackageFilterRow(
+    List<String> options,
+    String selected,
+    ValueChanged<String> onSelected,
+    Color activeColor,
+  ) {
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: options.map((option) {
+          final isSelected = selected == option;
+          return Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: ChoiceChip(
+              label: Text(
+                option,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w900,
+                  color: isSelected ? Colors.white : const Color(0xFF475569),
+                ),
+              ),
+              selected: isSelected,
+              selectedColor: activeColor,
+              backgroundColor: Colors.white,
+              side: BorderSide(color: isSelected ? activeColor : const Color(0xFFCBD5E1)),
+              onSelected: (_) => onSelected(isSelected ? 'الكل' : option),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildPackagesTab(_OperatorSpec op) {
     final app = context.watch<AppController>();
     final Map<String, List<_PackageItem>> pkgMap = _getPackagesForOp(op, app);
@@ -3504,34 +3539,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
         ],
 
         // Independent filters: billing type AND SIM/programming.
-        Widget filterRow(List<String> options, String selected, ValueChanged<String> onSelected) {
-          return SizedBox(
-            height: 34,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: options.map((option) {
-                final isSelected = selected == option;
-                return Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: ChoiceChip(
-                    label: Text(option, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: isSelected ? Colors.white : const Color(0xFF475569))),
-                    selected: isSelected,
-                    selectedColor: op.headerColor,
-                    backgroundColor: Colors.white,
-                    side: BorderSide(color: isSelected ? op.headerColor : const Color(0xFFCBD5E1)),
-                    onSelected: (_) => onSelected(isSelected ? 'الكل' : option),
-                  ),
-                );
-              }).toList(),
-            ),
-          );
-        }
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            filterRow(['دفع مسبق', 'فوترة'], billingFilter, (v) => setState(() => billingFilter = v)),
+            _buildPackageFilterRow(
+              ['دفع مسبق', 'فوترة'],
+              billingFilter,
+              (v) => setState(() => billingFilter = v),
+              op.headerColor,
+            ),
             const SizedBox(height: 4),
-            filterRow(['شريحة', 'برمجة'], packageKindFilter, (v) => setState(() => packageKindFilter = v)),
+            _buildPackageFilterRow(
+              ['شريحة', 'برمجة'],
+              packageKindFilter,
+              (v) => setState(() => packageKindFilter = v),
+              op.headerColor,
+            ),
           ],
         ),
         const SizedBox(height: 10),
