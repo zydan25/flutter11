@@ -1204,6 +1204,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   bool? _serverHasLoan(Map<String, dynamic> data) {
+    // A positive server-reported amount is stronger evidence than a conflicting
+    // boolean flag in a package response.
+    if (_serverLoanAmount(data) > 0) return true;
     for (final key in const [
       'loan', 'has_loan', 'hasLoan', 'is_loan', 'isLoan',
       'sulfa', 'has_sulfa', 'hasSulfa', 'loan_status',
