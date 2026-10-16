@@ -2733,7 +2733,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }.contains(normalizedKey)) {
         value = targetPhone;
       } else if (const {'amount', 'value', 'payment_amount'}.contains(normalizedKey)) {
-        if (itemId == null || pricingMode != 'item') value = amount;
+        if (itemId == null || pricingMode != 'item') {
+          value = repayLoan ? (amount - ymLoanAmount).clamp(0, double.infinity) : amount;
+        }
       } else if (normalizedKey == 'type' && currentOpId == 'yemen_net') {
         value = netTab == 'phone' ? 'phone' : 'adsl';
       } else if (const {'operator', 'network', 'carrier', 'service_operator'}.contains(normalizedKey)) {
@@ -2860,6 +2862,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
     if (targetPhone.trim().isEmpty || amount <= 0 || resolvedServiceId <= 0) {
       _showInquiryNotice('بيانات السداد غير مكتملة. تحقق من الرقم والمبلغ والخدمة.', isError: true);
+      return;
+    }
+    if (repayLoan &&
+        (ymLoanStatus != 'loan' ||
+            ymLoanAmount <= 0 ||
+            (ymLoanInquiryTransactionId ?? '').trim().isEmpty)) {
+      _showInquiryNotice('لا يمكن إضافة السلفة دون استعلام رصيد ناجح وحديث لهذا الرقم.', isError: true);
       return;
     }
 
@@ -3003,6 +3012,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
         itemId: itemId,
         idempotencyKey: idempotencyKey,
         payload: payload,
+        repayLoan: repayLoan,
+        loanInquiryTransactionId: repayLoan ? ymLoanInquiryTransactionId : null,
         maxWait: const Duration(seconds: 40),
         pollInterval: const Duration(seconds: 2),
       );
