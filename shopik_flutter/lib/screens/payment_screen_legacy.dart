@@ -1407,7 +1407,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
           });
         }
       } else if (type == 'sulfa') {
-        final tx = await app.api.queryYemenMobileOffers(normalizedPhone);
+        // The live balance inquiry is the source of truth for loan status and amount.
+        final tx = await app.api.queryYemenMobileBalance(normalizedPhone);
         if (!_isTransactionSuccess(tx)) {
           if (_isTransactionPending(tx)) {
             _showInquiryNotice('تم إرسال فحص السلفة إلى الخادم، وما زلنا ننتظر الرد.');
@@ -1418,11 +1419,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final rawResult = tx['result'];
         if (rawResult is! Map) throw Exception('لم يرجع الخادم تفاصيل السلفة.');
         final res = Map<String, dynamic>.from(rawResult);
-        final loanAmount = double.tryParse('${res['loan_amount'] ?? ''}') ?? 0.0;
-        if (mounted) setState(() {
-          ymLoanAmount = loanAmount;
-          ymLoanStatus = (res['loan'] == true || loanAmount > 0) ? 'loan' : 'none';
-        });
+        final loanAmount = _serverLoanAmount(res);
+        final hasLoan = _serverHasLoan(res);
+        final billing = _serverMobileBillingType(res);
+        if (mounted) {
+          setState(() {
+            ymLoanAmount = loanAmount;
+            ymLoanStatus = hasLoan == null ? 'unknown' : (hasLoan ? 'loan' : 'none');
+            ymPhoneType = _phoneInquiryTypeLabel(res);
+            if (billing != null) billingFilter = billing;
+            final balance = '${res['balance'] ?? ''}'.trim();
+            if (balance.isNotEmpty) ymPhoneBalance = '$balance ر.ي';
+          });
+        }
       }
     } catch (error) {
       if (mounted) {
