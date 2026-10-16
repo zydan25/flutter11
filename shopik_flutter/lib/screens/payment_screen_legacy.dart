@@ -1606,7 +1606,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   void _openPackageModal(_PackageItem pkg) {
     bool includeLoan = false;
-    final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages');
+    final app = context.read<AppController>();
+    final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app);
+    final packageServiceId = pkg.serviceId > 0 ? pkg.serviceId : resolvedService.id;
+    final packageContract = app.serviceDetailsCache[packageServiceId];
+    final packageServiceName = '${packageContract?['name'] ?? resolvedService.name}';
+    final loanAdditionSupported = _serverSupportsLoanAddition(pkg, app);
 
     showModalBottomSheet(
       context: context,
@@ -1695,11 +1700,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('إضافة سداد السلفة (+122.0 ر.ي)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF92400E))),
+                        Expanded(
+                        child: Text(
+                          ymLoanStatus == 'loan' && ymLoanAmount > 0
+                              ? 'تسديد مبلغ السلفة (${money(ymLoanAmount)})'
+                              : ymLoanStatus == 'none'
+                                  ? 'لا توجد سلفة حسب رد الخادم'
+                                  : 'افحص السلفة أولاً',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF92400E)),
+                        ),
+                      ),
                         Switch(
                           value: includeLoan,
                           activeThumbColor: const Color(0xFFD97706),
-                          onChanged: (v) => setSheetState(() => includeLoan = v),
+                          onChanged: ymLoanStatus == 'loan' && ymLoanAmount > 0 && loanAdditionSupported
+                              ? (v) => setSheetState(() => includeLoan = v)
+                              : null,
                         ),
                       ],
                     ),
@@ -1739,8 +1755,39 @@ class _PaymentScreenState extends State<PaymentScreen> {
                     );
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
-                  child: const Text('تأكيد طلب السداد', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  child: const Text('تسديد + تفعيل', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
                 ),
+                if (currentOp.id == 'yemen_mobile') ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _submitYemenMobileBalanceForPackage(pkg, ctx),
+                          icon: const Icon(Icons.account_balance_wallet_outlined, size: 17),
+                          label: const Text('تسديد الرصيد', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                          style: OutlinedButton.styleFrom(foregroundColor: currentOp.headerColor, side: BorderSide(color: currentOp.headerColor.withOpacity(0.5))),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _submitYemenMobileActivationOnly(pkg, ctx),
+                          icon: const Icon(Icons.bolt_rounded, size: 17),
+                          label: const Text('تفعيل فقط', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                          style: OutlinedButton.styleFrom(foregroundColor: currentOp.headerColor, side: BorderSide(color: currentOp.headerColor.withOpacity(0.5))),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (ymLoanStatus == 'loan' && ymLoanAmount > 0 && !loanAdditionSupported) ...[
+                    const SizedBox(height: 5),
+                    const Text(
+                      'يعرض الخادم مبلغ السلفة، لكن خدمة الباقة الحالية لا تتيح إضافته إلى مبلغ الخصم. لم نفعّل الخيار لتجنب خصم غير صحيح.',
+                      style: TextStyle(fontSize: 10, color: Color(0xFFB45309), fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ],
               ],
             ),
           );
