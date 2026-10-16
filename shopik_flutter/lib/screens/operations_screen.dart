@@ -1,8 +1,102 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../core/app_controller.dart';
 import '../widgets/common.dart';
+
+
+String _transactionPhone(Map<String, dynamic> item) {
+  final payload = item['payload'] is Map
+      ? Map<String, dynamic>.from(item['payload'] as Map)
+      : <String, dynamic>{};
+  for (final key in const [
+    'phone', 'mobile', 'mobile_number', 'phone_number',
+    'subscriber_number', 'account_number', 'msisdn',
+  ]) {
+    final value = item[key] ?? payload[key];
+    if (value != null && '${value}'.trim().isNotEmpty) return '${value}'.trim();
+  }
+  return '';
+}
+
+dynamic _transactionResponse(Map<String, dynamic> item) =>
+    item['provider_response'] ?? item['server_response'] ?? item['raw_response'] ?? item['result'] ?? item['response'];
+
+String _transactionResponseText(Map<String, dynamic> item) {
+  final response = _transactionResponse(item);
+  if (response == null) return '';
+  if (response is String) return response;
+  try {
+    return const JsonEncoder.withIndent('  ').convert(response);
+  } catch (_) {
+    return '${response}';
+  }
+}
+
+String _transactionServiceName(Map<String, dynamic> item, [AppController? app]) {
+  final code = '${item['service_code'] ?? item['service'] ?? item['service_key'] ?? ''}'.trim();
+  for (final key in const ['service_name', 'service_display_name', 'display_name']) {
+    final name = '${item[key] ?? ''}'.trim();
+    if (name.isNotEmpty && name.toLowerCase() != code.toLowerCase()) return name;
+  }
+  if (app != null && code.isNotEmpty) {
+    for (final setting in app.serviceSettingsRaw) {
+      final nested = setting['service'] is Map
+          ? Map<String, dynamic>.from(setting['service'] as Map)
+          : <String, dynamic>{};
+      final keys = [
+        '${setting['key'] ?? ''}',
+        '${setting['service_code'] ?? ''}',
+        '${nested['code'] ?? ''}',
+        '${nested['slug'] ?? ''}',
+      ].map((v) => v.trim().toLowerCase()).where((v) => v.isNotEmpty);
+      if (keys.contains(code.toLowerCase())) {
+        final name = '${nested['name'] ?? setting['name'] ?? ''}'.trim();
+        if (name.isNotEmpty) return name;
+      }
+    }
+    final id = int.tryParse('${item['service_id'] ?? ''}');
+    for (final entry in app.serviceDetailsCache.entries) {
+      final detail = entry.value;
+      if ((id != null && entry.key == id) ||
+          '${detail['code'] ?? ''}'.trim().toLowerCase() == code.toLowerCase() ||
+          '${detail['slug'] ?? ''}'.trim().toLowerCase() == code.toLowerCase()) {
+        final name = '${detail['name'] ?? ''}'.trim();
+        if (name.isNotEmpty) return name;
+      }
+    }
+  }
+  switch (code.toLowerCase()) {
+    case 'yem-balance':
+    case 'yemen_mobile_recharge':
+    case 'yemen-mobile-recharge':
+      return 'تسديد رصيد يمن موبايل';
+    case 'yemen_mobile_balance':
+    case 'yem-balance-inquiry':
+      return 'استعلام رصيد يمن موبايل';
+    case 'yemen_mobile_offers':
+    case 'yem-offers':
+      return 'استعلام باقات يمن موبايل';
+    case 'bagatmobileget':
+      return 'باقات يمن موبايل';
+  }
+  final fallback = '${item['packageName'] ?? item['item_name'] ?? item['title'] ?? item['name'] ?? code}'.trim();
+  return fallback.isEmpty ? 'خدمة غير محددة' : fallback;
+}
+
+bool _isServiceInquiry(Map<String, dynamic> item) {
+  final kind = '${item['service_kind'] ?? item['serviceKind'] ?? ''}'.trim().toLowerCase();
+  if (kind == 'query' || kind == 'catalog') return true;
+  final code = '${item['service_code'] ?? item['service'] ?? item['service_key'] ?? ''}'.trim().toLowerCase();
+  final label = '${item['service_name'] ?? item['display_name'] ?? item['type'] ?? item['action'] ?? ''}'.trim().toLowerCase();
+  final text = '$code $label';
+  return const [
+    'inquiry', 'query', 'catalog', 'استعلام', 'فحص السلفة', 'loan_check',
+    'sulfa_check', 'check_balance', 'check_offers', 'packages_list',
+  ].any(text.contains);
+}
 
 class OperationsScreen extends StatefulWidget {
   const OperationsScreen({super.key, this.onBack});
@@ -21,8 +115,11 @@ class _OperationsScreenState extends State<OperationsScreen> {
   bool _showSearchField = false;
   final TextEditingController _searchCtrl = TextEditingController();
 
-  // Local state for operations loaded from server
+  // Payment records and provider inquiries are shown in separate sections.
   List<Map<String, dynamic>> _operations = [];
+  List<Map<String, dynamic>> _inquiries = [];
+  String _selectedSection = 'operations';
+  bool _sortByPhone = false;
 
   @override
   void initState() {
@@ -37,22 +134,21 @@ class _OperationsScreenState extends State<OperationsScreen> {
   }
 
   Future<void> _loadOperations() async {
-    setState(() => _loading = true);
-    try {
-      final app = context.read<AppController>();
-      final serverOps = await app.api.serviceRequests();
-      if (serverOps.isNotEmpty) {
-        setState(() {
-          _operations = serverOps;
-          _loading = false;
-        });
-        return;
-      }
-    } catch (_) {}
-
+    if (mounted) setState(() => _loading = true);
     final app = context.read<AppController>();
+    List<Map<String, dynamic>> records = [];
+    try {
+      records = await app.api.serviceRequests();
+      if (records.isEmpty) records = await app.api.serviceReports();
+    } catch (_) {}
+    if (records.isEmpty) records = List<Map<String, dynamic>>.from(app.operations);
+
+    final inquiries = records.where(_isServiceInquiry).toList();
+    final payments = records.where((item) => !_isServiceInquiry(item)).toList();
+    if (!mounted) return;
     setState(() {
-      _operations = List.from(app.operations);
+      _operations = payments;
+      _inquiries = inquiries;
       _loading = false;
     });
   }
