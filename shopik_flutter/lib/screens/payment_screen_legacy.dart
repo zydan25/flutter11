@@ -1527,16 +1527,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
   bool _matchesServerPackageItem(_PackageItem pkg, Map<String, dynamic> item) {
     final sourceType = '${pkg.rawItem?['type'] ?? ''}'.trim().toLowerCase();
     final targetType = '${item['type'] ?? ''}'.trim().toLowerCase();
-    if (sourceType.isNotEmpty && targetType.isNotEmpty && sourceType != targetType) return false;
-
     Map<String, dynamic> metadata(Map<String, dynamic> value) =>
         value['metadata'] is Map ? Map<String, dynamic>.from(value['metadata'] as Map) : <String, dynamic>{};
     final sourceMeta = metadata(pkg.rawItem ?? <String, dynamic>{});
     final targetMeta = metadata(item);
     final sourceCode = '${pkg.code.isNotEmpty ? pkg.code : (sourceMeta['provider_offer_code'] ?? sourceMeta['exact_api_code'] ?? sourceMeta['package_code'] ?? '')}'.trim().toLowerCase();
     final targetCode = '${targetMeta['provider_offer_code'] ?? targetMeta['exact_api_code'] ?? targetMeta['package_code'] ?? item['code'] ?? item['external_code'] ?? ''}'.trim().toLowerCase();
-    if (sourceCode.isNotEmpty && targetCode.isNotEmpty && sourceCode == targetCode) return true;
-    return '${pkg.name}'.trim().toLowerCase() == '${item['name'] ?? ''}'.trim().toLowerCase();
+    if (sourceCode.isNotEmpty && targetCode.isNotEmpty) return sourceCode == targetCode;
+    final namesMatch = '${pkg.name}'.trim().toLowerCase() == '${item['name'] ?? ''}'.trim().toLowerCase();
+    return namesMatch && (sourceType.isEmpty || targetType.isEmpty || sourceType == targetType);
   }
 
   List<int> _packagePurchaseServiceCandidates(AppController app, _PackageItem pkg) {
@@ -1584,7 +1583,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final key = '${setting['key'] ?? ''}'.trim().toLowerCase();
       final packageLike = key.contains('package') || key.contains('bagat') || key.contains('plan');
       final candidateAction = key.contains('pay') || key.contains('activat') || key.contains('list') || key.contains('package') || key.contains('bagat');
-      if (packageLike && candidateAction && operatorTokens.any(key.contains)) {
+      if (packageLike && candidateAction && operatorTokens.any((token) => key.contains(token))) {
         add(setting['service_id'] ?? (setting['service'] is Map ? setting['service']['id'] : null));
       }
     }
@@ -1925,17 +1924,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       return;
                     }
                     unawaited(_submitServerPackageAction(pkg, ctx, repayLoan: includeLoan));
-                    return;
-                    Navigator.pop(ctx);
-                    _openConfirmPaymentDialog(
-                      itemName: pkg.name,
-                      amount: effectivePrice,
-                      serviceId: packageServiceId,
-                      serviceName: packageServiceName,
-                      itemId: pkg.id,
-                      itemCode: pkg.code,
-                      itemType: catalogItemType,
-                    );
                   },
                   style: FilledButton.styleFrom(backgroundColor: currentOp.headerColor, minimumSize: const Size(double.infinity, 44)),
                   child: const Text('تسديد + تفعيل', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
