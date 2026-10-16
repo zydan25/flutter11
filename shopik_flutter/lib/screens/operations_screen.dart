@@ -944,9 +944,11 @@ class OperationDetailScreen extends StatelessWidget {
     final rawOpId = '${operation['id'] ?? ''}'.trim();
     final opId = rawOpId.isEmpty ? 'غير متوفر' : rawOpId;
     final shortTitle = opId.length > 12 ? '${opId.substring(0, 12)}...' : opId;
-    final service = '${operation['service'] ?? operation['packageName'] ?? 'خدمة غير محددة'}';
-    final type = '${operation['type'] ?? 'غير محدد'}';
-    final phone = '${operation['phone'] ?? operation['mobile'] ?? ''}'.trim();
+    final app = context.read<AppController>();
+    final service = _transactionServiceName(operation, app);
+    final type = '${operation['type'] ?? operation['item_name'] ?? operation['packageName'] ?? operation['service_kind'] ?? 'غير محدد'}';
+    final phone = _transactionPhone(operation);
+    final serverResponse = _transactionResponseText(operation);
     final amount = double.tryParse('${operation['amount'] ?? ''}') ?? 0.0;
     final createdAt = '${operation['created_at'] ?? 'غير متوفر'}';
     final completedAt = '${operation['completed_at'] ?? 'لم تكتمل بعد'}';
@@ -999,7 +1001,7 @@ class OperationDetailScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.share_rounded, color: Colors.white, size: 20),
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nالمبلغ: $amount ر.ي\nالحالة: $readinessLabel'));
+              Clipboard.setData(ClipboardData(text: 'تفاصيل العملية #$opId:\nالخدمة: $service\nرقم الهاتف: $phone\nالمبلغ: $amount ر.ي\nالحالة: $readinessLabel\nرد الخادم: $serverResponse'));
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('تم نسخ تفاصيل العملية للمشاركة')),
               );
@@ -1064,6 +1066,8 @@ class OperationDetailScreen extends StatelessWidget {
                 _buildDetailRow('تاريخ التجهيز', completedAt),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('الحالة من الخادم', readinessLabel, isGreen: isReady),
+                const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                _buildDetailRow('رد الخادم كما وصل', serverResponse.isNotEmpty ? serverResponse : 'لم يرسل الخادم ردًا تفصيليًا لهذه العملية'),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 _buildDetailRow('الحالة', stateCode),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
