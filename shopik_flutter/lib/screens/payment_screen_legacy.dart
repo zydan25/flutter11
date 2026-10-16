@@ -2626,7 +2626,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     final payload = <String, dynamic>{};
     final pricingMode = '${contract['pricing_mode'] ?? ''}'.trim().toLowerCase();
+    final serviceKind = '${contract['service_kind'] ?? ''}'.trim().toLowerCase();
     final requiresBalance = contract['requires_balance'] == true;
+    if (serviceKind != 'purchase' || !requiresBalance) {
+      throw Exception('الخدمة المختارة ليست خدمة شراء مدفوعة مهيأة لخصم الرصيد. لم نرسل الطلب حتى لا يتحول الاستعلام أو الكتالوج إلى عملية سداد.');
+    }
     if (requiresBalance && pricingMode == 'item' && !hasCatalogItem) {
       throw Exception('هذه الخدمة مسعّرة بحسب الباقة. اختر عنصرًا من كتالوج الخادم بدل استخدام فئة ثابتة قديمة.');
     }
