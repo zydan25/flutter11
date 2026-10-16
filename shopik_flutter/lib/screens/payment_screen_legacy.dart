@@ -989,25 +989,62 @@ class _PaymentScreenState extends State<PaymentScreen> {
       matchedOpId = 'yemen_net';
     }
 
-    if (matchedOpId != null && matchedOpId != currentOpId) {
+    final previousOpId = currentOpId;
+    final keepPhoneFocus = phoneFocusNode.hasFocus;
+    if (matchedOpId != null) {
       final op = operators.firstWhere((o) => o.id == matchedOpId);
-      setState(() {
-        currentOpId = matchedOpId!;
-        activeMainTab = matchedOpId == 'yemen4g'
-            ? 'باقة يمن 4G'
-            : matchedOpId == 'yemen_net'
-                ? 'الانترنت الارضي'
-                : op.mainTabs.first;
-        operatorRestrictedToast = 'تم اختيار ${op.name} تلقائيًا وفق رقم الهاتف';
-      });
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted && operatorRestrictedToast?.startsWith('تم اختيار') == true) {
-          setState(() => operatorRestrictedToast = null);
+      if (matchedOpId != currentOpId) {
+        setState(() {
+          currentOpId = matchedOpId!;
+          activeMainTab = op.mainTabs.contains('باقات') ? 'باقات' : op.mainTabs.first;
+          billingFilter = 'الكل';
+          packageKindFilter = 'الكل';
+          operatorRestrictedToast = null;
+          balanceInquiryBanner = null;
+          activeSubscriptions = [];
+          ymPhoneBalance = '---';
+          ymPhoneType = '---';
+          ymLoanStatus = 'unknown';
+          ymLoanAmount = 0;
+          fourGInquiryData = null;
+          netInquiryData = null;
+        });
+        if (keepPhoneFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && phoneFocusNode.canRequestFocus) phoneFocusNode.requestFocus();
+          });
         }
-      });
+      } else {
+        setState(() {});
+      }
+    } else {
+      _offersInquiryDebounce?.cancel();
+      if (previousOpId.isNotEmpty || activeMainTab.isNotEmpty || operatorRestrictedToast != null) {
+        setState(() {
+          currentOpId = '';
+          activeMainTab = '';
+          billingFilter = 'الكل';
+          packageKindFilter = 'الكل';
+          operatorRestrictedToast = null;
+          balanceInquiryBanner = null;
+          activeSubscriptions = [];
+          ymPhoneBalance = '---';
+          ymPhoneType = '---';
+          ymLoanStatus = 'unknown';
+          ymLoanAmount = 0;
+          fourGInquiryData = null;
+          netInquiryData = null;
+        });
+        if (keepPhoneFocus) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && phoneFocusNode.canRequestFocus) phoneFocusNode.requestFocus();
+          });
+        }
+      } else {
+        setState(() {});
+      }
     }
 
-    // Debounce the live inquiry until the full Yemen Mobile number is entered.
     if (currentOpId == 'yemen_mobile' &&
         activeMainTab == 'باقات' &&
         clean.length == 9 &&
@@ -1026,6 +1063,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     }
   }
+
   void _selectOperator(_OperatorSpec op) {
     setState(() {
       currentOpId = op.id;
@@ -1078,7 +1116,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         data['mobile_type_name'] ??
         data['subscriber_type'] ??
         data['billing_type'];
-    final value = '\${raw ?? ''}'.trim().toLowerCase();
+    final value = '${raw ?? ''}'.trim().toLowerCase();
     if (value.isEmpty) return null;
     if (const {'1', 'prepaid', 'pre_paid', 'pre paid', 'pre-paid'}.contains(value) ||
         value.contains('دفع مسبق') ||
@@ -1099,7 +1137,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
     ]) {
       if (data.containsKey(key) && data[key] != null) {
-        final value = double.tryParse('\${data[key]}'.trim());
+        final value = double.tryParse('${data[key]}'.trim());
         if (value != null && value >= 0) return value;
       }
     }
@@ -1114,7 +1152,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!data.containsKey(key) || data[key] == null) continue;
       final raw = data[key];
       if (raw is bool) return raw;
-      final value = '\$raw'.trim().toLowerCase();
+      final value = '$raw'.trim().toLowerCase();
       if (const {'1', 'true', 'yes', 'yes loan', 'loan', 'متسلف', 'نعم'}.contains(value)) return true;
       if (const {'0', 'false', 'no', 'none', 'no loan', 'غير متسلف', 'لا'}.contains(value)) return false;
       if (value.contains('متسلف') && !value.contains('غير متسلف')) return true;
