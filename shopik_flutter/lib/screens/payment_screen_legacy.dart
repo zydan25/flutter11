@@ -1539,42 +1539,64 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return '${pkg.name}'.trim().toLowerCase() == '${item['name'] ?? ''}'.trim().toLowerCase();
   }
 
-  List<int> _yemenMobilePackageServiceCandidates(AppController app, _PackageItem pkg) {
+  List<int> _packagePurchaseServiceCandidates(AppController app, _PackageItem pkg) {
     final ids = <int>[];
     void add(dynamic value) {
       final id = int.tryParse('${value ?? ''}');
       if (id != null && id > 0 && !ids.contains(id)) ids.add(id);
     }
 
-    // Prefer configured purchase-service keys, but still validate the server contract.
-    const preferredKeys = [
-      'yemen_mobile_package_pay_activate',
-      'yemen_mobile_package_pay',
-      'yemen_mobile_packages_pay',
-      'yemen_mobile_packages_activate',
-      'bagatmobileget',
-      'yemen_mobile_packages_list',
-    ];
-    for (final key in preferredKeys) {
+    final preferredKeys = <String, List<String>>{
+      'yemen_mobile': [
+        'yemen_mobile_package_pay_activate', 'yemen_mobile_package_pay',
+        'yemen_mobile_packages_pay', 'yemen_mobile_packages_activate',
+        'bagatmobileget', 'yemen_mobile_packages_list',
+      ],
+      'sabafon': [
+        'sabafon_package_pay_activate', 'sabafon_package_pay', 'sabafon_packages_pay',
+        'bagatsabafonget', 'sabafon_north_packages_list', 'sabafon_packages_legacy',
+      ],
+      'you': [
+        'you_package_pay_activate', 'you_package_pay', 'you_packages_pay',
+        'bagatyouget', 'bagatyou', 'you_packages_list',
+      ],
+      'y': [
+        'wai_package_pay_activate', 'wai_package_pay', 'wai_packages_pay',
+        'bagatwayget', 'wai_packages_list',
+      ],
+      'yemen4g': ['yemen4g_packages_pay', 'yemen4g_packages_list'],
+      'yemen_net': ['yemen_net_package_pay', 'yemen_net_packages_list'],
+    };
+    for (final key in preferredKeys[currentOpId] ?? const <String>[]) {
       add(app.getServiceId(key));
     }
+
+    final operatorTokens = switch (currentOpId) {
+      'yemen_mobile' => const ['yemen_mobile', 'bagatmobile'],
+      'sabafon' => const ['sabafon', 'bagatsabafon'],
+      'you' => const ['you', 'bagatyou'],
+      'y' => const ['wai', 'bagatway'],
+      'yemen4g' => const ['yemen4g'],
+      'yemen_net' => const ['yemen_net'],
+      _ => const <String>[],
+    };
     for (final setting in app.serviceSettingsRaw) {
       final key = '${setting['key'] ?? ''}'.trim().toLowerCase();
-      if (key.contains('yemen_mobile') &&
-          key.contains('package') &&
-          (key.contains('pay') || key.contains('activat') || key.contains('bagat') || key.contains('list'))) {
+      final packageLike = key.contains('package') || key.contains('bagat') || key.contains('plan');
+      final candidateAction = key.contains('pay') || key.contains('activat') || key.contains('list') || key.contains('package') || key.contains('bagat');
+      if (packageLike && candidateAction && operatorTokens.any(key.contains)) {
         add(setting['service_id'] ?? (setting['service'] is Map ? setting['service']['id'] : null));
       }
     }
+    for (final id in _getOperatorTargetServiceIds(currentOp, app)) {
+      add(id);
+    }
     add(pkg.serviceId);
-    // Legacy IDs are only candidates; their service type is always checked below.
-    add(3);
-    add(4);
     return ids;
   }
 
-  Map<String, dynamic>? _serverPurchaseContractMatchingPackage(AppController app, _PackageItem pkg) {
-    for (final serviceId in _yemenMobilePackageServiceCandidates(app, pkg)) {
+    Map<String, dynamic>? _serverPurchaseContractMatchingPackage(AppController app, _PackageItem pkg) {
+    for (final serviceId in _packagePurchaseServiceCandidates(app, pkg)) {
       final contract = app.serviceDetailsCache[serviceId];
       if (contract == null) continue;
       if ('${contract['service_kind'] ?? ''}'.trim().toLowerCase() != 'purchase' ||
@@ -1616,7 +1638,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return hasAmountField && hasLoanField;
   }
 
-  Future<void> _submitYemenMobilePackageAction(
+  Future<void> _submitServerPackageAction(
     _PackageItem pkg,
     BuildContext sheetContext, {
     required bool repayLoan,
@@ -1767,13 +1789,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
     bool includeLoan = false;
     final app = context.read<AppController>();
     final resolvedService = _resolveServiceForCurrentAction(actionType: 'packages', appInstance: app);
-    if (currentOp.id == 'yemen_mobile') {
-      final ids = _yemenMobilePackageServiceCandidates(app, pkg);
-      await Future.wait(ids.where((id) => !app.serviceDetailsCache.containsKey(id)).map((id) => app.loadServiceContract(id)));
-    }
-    final purchaseMatch = currentOp.id == 'yemen_mobile'
-        ? _serverPurchaseContractMatchingPackage(app, pkg)
-        : null;
+    final ids = _packagePurchaseServiceCandidates(app, pkg);
+    await Future.wait(ids.where((id) => !app.serviceDetailsCache.containsKey(id)).map((id) => app.loadServiceContract(id)));
+    final purchaseMatch = _serverPurchaseContractMatchingPackage(app, pkg);
     final packageServiceId = int.tryParse('${purchaseMatch?['service_id'] ?? pkg.serviceId}') ?? resolvedService.id;
     final packageContract = purchaseMatch?['contract'] is Map
         ? Map<String, dynamic>.from(purchaseMatch!['contract'] as Map)
@@ -1906,10 +1924,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       _showInquiryNotice('هذه الباقة ليست مرتبطة بكتالوج الخادم الحالي. حدّث خدمات الاتصالات قبل السداد.', isError: true);
                       return;
                     }
-                    if (currentOp.id == 'yemen_mobile') {
-                      unawaited(_submitYemenMobilePackageAction(pkg, ctx, repayLoan: includeLoan));
-                      return;
-                    }
+                    unawaited(_submitServerPackageAction(pkg, ctx, repayLoan: includeLoan));
+                    return;
                     Navigator.pop(ctx);
                     _openConfirmPaymentDialog(
                       itemName: pkg.name,
