@@ -139,6 +139,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   bool _paymentInProgress = false;
   Timer? _offersInquiryDebounce;
   String? _lastOffersInquiryPhone;
+  String _lastHandledPhoneDigits = '';
 
   // Accordion state
   final Map<String, bool> expandedCategories = {
@@ -1003,6 +1004,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   void _handlePhoneChange(String val) {
     final clean = val.replaceAll(RegExp(r'\D'), '');
+    final numberChanged = clean != _lastHandledPhoneDigits;
+    _lastHandledPhoneDigits = clean;
+
     String? matchedOpId;
     if (clean.startsWith('77') || clean.startsWith('78')) {
       matchedOpId = 'yemen_mobile';
@@ -1044,7 +1048,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
           });
         }
       } else {
-        setState(() {});
+        setState(() {
+          if (numberChanged) {
+            // Never show another subscriber's previous balance/type/loan for a new number.
+            billingFilter = 'الكل';
+            balanceInquiryBanner = null;
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'unknown';
+            ymLoanAmount = 0;
+            fourGInquiryData = null;
+            netInquiryData = null;
+          }
+        });
       }
     } else {
       _offersInquiryDebounce?.cancel();
@@ -1070,7 +1087,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
           });
         }
       } else {
-        setState(() {});
+        if (numberChanged) {
+          setState(() {
+            balanceInquiryBanner = null;
+            activeSubscriptions = [];
+            ymPhoneBalance = '---';
+            ymPhoneType = '---';
+            ymLoanStatus = 'unknown';
+            ymLoanAmount = 0;
+            fourGInquiryData = null;
+            netInquiryData = null;
+          });
+        } else {
+          setState(() {});
+        }
       }
     }
 
@@ -1078,7 +1108,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         activeMainTab == 'باقات' &&
         clean.length == 9 &&
         (clean.startsWith('77') || clean.startsWith('78'))) {
-      if (_lastOffersInquiryPhone == clean) return;
+      if (_lastOffersInquiryPhone == clean && !numberChanged) return;
       _offersInquiryDebounce?.cancel();
       _offersInquiryDebounce = Timer(const Duration(milliseconds: 450), () {
         if (!mounted || phone.text.replaceAll(RegExp(r'\D'), '') != clean) return;
