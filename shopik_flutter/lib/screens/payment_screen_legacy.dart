@@ -1351,33 +1351,35 @@ class _PaymentScreenState extends State<PaymentScreen> {
         final res = Map<String, dynamic>.from(rawResult);
 
         String? liveBalance = '${res['balance'] ?? ''}'.trim();
-        // Offers responses can omit subscriber type and loan details; use the dedicated balance inquiry.
+        // The balance endpoint is authoritative for billing type and loan. A package
+        // response may contain a default "no loan" flag, so query balance whenever
+        // this subscriber has not yet been checked for the current number.
         final missingBilling = _serverMobileBillingType(res) == null;
-        final missingLoan = _serverHasLoan(res) == null;
+        final hasLoanAmountField = const [
+          'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
+          'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
+        ].any((key) => res[key] != null);
+        final missingLoan = ymLoanStatus == 'unknown' || !hasLoanAmountField;
         if (liveBalance.isEmpty || missingBilling || missingLoan) {
           try {
             final balanceTx = await app.api.queryYemenMobileBalance(normalizedPhone);
             if (_isTransactionSuccess(balanceTx) && balanceTx['result'] is Map) {
               final balanceResult = Map<String, dynamic>.from(balanceTx['result'] as Map);
-              for (final key in const [
+              const authoritativeKeys = {
                 'balance', 'mobileType', 'mobile_type', 'mobileTypeName',
                 'mobile_type_name', 'subscriber_type', 'billing_type',
                 'loan', 'has_loan', 'hasLoan', 'is_loan', 'isLoan',
                 'sulfa', 'has_sulfa', 'hasSulfa', 'loan_status',
                 'loan_amount', 'loanAmount', 'loan_balance', 'loanBalance',
                 'sulfa_amount', 'sulfaAmount', 'loan_due', 'loanDue',
-              ]) {
-                final current = res[key];
-                if (current == null || '$current'.trim().isEmpty) {
-                  if (balanceResult.containsKey(key) && balanceResult[key] != null) {
-                    res[key] = balanceResult[key];
-                  }
+              };
+              for (final key in authoritativeKeys) {
+                if (balanceResult.containsKey(key) && balanceResult[key] != null) {
+                  res[key] = balanceResult[key];
                 }
               }
               final fetchedBalance = '${balanceResult['balance'] ?? ''}'.trim();
-              if ((liveBalance == null || liveBalance!.isEmpty) && fetchedBalance.isNotEmpty) {
-                liveBalance = fetchedBalance;
-              }
+              if (fetchedBalance.isNotEmpty) liveBalance = fetchedBalance;
             }
           } catch (_) {
             // Keep the type/loan unknown if the secondary inquiry fails.
