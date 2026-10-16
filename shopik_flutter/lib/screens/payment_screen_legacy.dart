@@ -2502,10 +2502,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final defaultValue = field['default'];
       dynamic value;
 
-      if (repayLoan && const {'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount'}.contains(normalizedKey)) {
-        value = ymLoanAmount;
-      } else if (repayLoan && const {'loan', 'has_loan', 'hasloan', 'is_loan', 'isloan', 'repay_loan', 'repayloan', 'include_loan', 'includeloan', 'pay_loan', 'settle_loan', 'sulfa', 'has_sulfa', 'hassulfa'}.contains(normalizedKey)) {
-        value = true;
+      if (const {'loan_amount', 'loanamount', 'sulfa_amount', 'sulfaamount', 'loan_balance', 'loanbalance'}.contains(normalizedKey)) {
+        // Send only the authoritative amount from the server inquiry; 0 when not selected.
+        value = repayLoan ? ymLoanAmount : 0;
+      } else if (const {'loan', 'has_loan', 'hasloan', 'is_loan', 'isloan', 'repay_loan', 'repayloan', 'include_loan', 'includeloan', 'pay_loan', 'settle_loan', 'sulfa', 'has_sulfa', 'hassulfa'}.contains(normalizedKey)) {
+        value = repayLoan;
       } else if (const {
         'mobile', 'phone', 'msisdn', 'mobile_number', 'phone_number',
         'subscriber_number', 'account_number', 'line_number', 'recipient_number',
